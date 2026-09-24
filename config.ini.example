@@ -1,0 +1,16 @@
+; renewvan-tank — local configuration
+; ======================================
+; Copy this file to config.ini and override only what differs from
+; config.default.ini. config.ini is gitignored — it holds this
+; installation's real MQTT broker host and calibrated sensor_min/max.
+
+[mqtt]
+host = 192.168.1.10
+
+[tank.fresh]
+sensor_min = 0.0
+sensor_max = 190.0
+
+[tank.grey]
+sensor_min = 0.0
+sensor_max = 190.0
