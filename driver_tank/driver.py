@@ -11,9 +11,9 @@ import json
 import logging
 import time
 
-from renewvan_tank.adc import ADS1115
-from renewvan_tank.config import AppConfig, TankConfig
-from renewvan_tank.publisher import Publisher
+from driver_tank.adc import ADS1115
+from driver_tank.config import AppConfig, TankConfig
+from driver_tank.publisher import Publisher
 
 logger = logging.getLogger(__name__)
 

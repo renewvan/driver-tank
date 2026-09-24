@@ -11,7 +11,7 @@ import configparser
 from dataclasses import dataclass
 from pathlib import Path
 
-from renewvan_tank.calibration import Calibration, parse_shape
+from driver_tank.calibration import Calibration, parse_shape
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.default.ini"
 
@@ -67,7 +67,7 @@ def load_config(default_path: Path = DEFAULT_CONFIG_PATH, local_path: Path | Non
         port=mqtt_section.getint("port", 1883),
         username=mqtt_section.get("username", fallback=None) or None,
         password=mqtt_section.get("password", fallback=None) or None,
-        client_id=mqtt_section.get("client_id", "renewvan-tank"),
+        client_id=mqtt_section.get("client_id", "driver-tank"),
         reconnect_min_delay=mqtt_section.getfloat("reconnect_min_delay", 1.0),
         reconnect_max_delay=mqtt_section.getfloat("reconnect_max_delay", 30.0),
     )

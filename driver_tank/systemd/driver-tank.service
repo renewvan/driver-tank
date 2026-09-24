@@ -1,0 +1,15 @@
+[Unit]
+Description=driver-tank MQTT driver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/driver-tank
+ExecStart=/opt/driver-tank/.venv/bin/python -m driver_tank.main --config /opt/driver-tank/config.ini
+Restart=on-failure
+RestartSec=5
+User=renewvan
+
+[Install]
+WantedBy=multi-user.target

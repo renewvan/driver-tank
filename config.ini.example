@@ -1,4 +1,4 @@
-; renewvan-tank — local configuration
+; driver-tank — local configuration
 ; ======================================
 ; Copy this file to config.ini and override only what differs from
 ; config.default.ini. config.ini is gitignored — it holds this

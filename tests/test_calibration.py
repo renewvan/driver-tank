@@ -1,5 +1,5 @@
 """Fixture-voltage tests for calibration math — no MQTT broker or hardware."""
-from renewvan_tank.calibration import Calibration, Status, ShapePoint, apply_shape_correction, parse_shape
+from driver_tank.calibration import Calibration, Status, ShapePoint, apply_shape_correction, parse_shape
 
 
 def european_calibration() -> Calibration:

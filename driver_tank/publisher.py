@@ -11,7 +11,7 @@ import logging
 
 import paho.mqtt.client as mqtt
 
-from renewvan_tank.config import MqttConfig
+from driver_tank.config import MqttConfig
 
 logger = logging.getLogger(__name__)
 

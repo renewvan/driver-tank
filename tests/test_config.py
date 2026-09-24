@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from renewvan_tank.config import load_config
+from driver_tank.config import load_config
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
