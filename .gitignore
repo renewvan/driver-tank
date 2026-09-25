@@ -1,6 +1,4 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-config.ini
 .venv/
 *.egg-info/
+.pytest_cache/
+/config.ini
