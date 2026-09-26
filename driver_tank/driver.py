@@ -1,4 +1,4 @@
-"""Publish loop: ADC read -> calibration math -> van/tank/<id>/<property>.
+"""Publish loop: ADC read -> calibration math -> renewvan/tank/<id>/<property>.
 
 Field/topic shape per hub's schema/tank.schema.json and
 docs/porting-dbus-driver-to-mqtt.md: fluid_type/capacity_l published
@@ -21,7 +21,7 @@ _PGA_DEFAULT = 4.096
 
 
 def _topic(tank_id: str, prop: str) -> str:
-    return f"van/tank/{tank_id}/{prop}"
+    return f"renewvan/tank/{tank_id}/{prop}"
 
 
 def publish_identity(publisher: Publisher, tank: TankConfig) -> None:

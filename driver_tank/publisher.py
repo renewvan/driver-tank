@@ -15,7 +15,7 @@ from driver_tank.config import MqttConfig
 
 logger = logging.getLogger(__name__)
 
-HEALTH_TOPIC = "van/tank/driver/status"
+HEALTH_TOPIC = "renewvan/tank/health"
 
 
 class Publisher:

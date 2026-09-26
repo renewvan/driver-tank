@@ -19,14 +19,16 @@ versioned image.
 
 ## Topics published
 
-Retained, under `van/tank/<fresh|grey>/`:
+Retained, under `renewvan/tank/<fresh|grey>/`:
 
 - `fluid_type` — string, published once at startup (identity field)
 - `capacity_l` — number, published once at startup (identity field)
 - `level_pct` — number 0–100, republished every read
 - `status` — `ok` / `open_circuit` / `short_circuit`, republished every read
 
-Driver liveness: `van/tank/driver/status` (`online`/`offline` via MQTT LWT).
+Driver liveness: `renewvan/tank/health` (`online`/`offline` via MQTT LWT) —
+deliberately 3 segments, not 4, so it can't be mistaken for a `tank`
+entity keyed by a fake `health`/`driver` id.
 
 Payload shapes match `hub`'s `schema/tank.schema.json`.
 
