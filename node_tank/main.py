@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""driver-tank entrypoint."""
+"""node-tank entrypoint."""
 from __future__ import annotations
 
 import argparse
 import logging
 from pathlib import Path
 
-from driver_tank.config import DEFAULT_CONFIG_PATH, load_config
-from driver_tank.driver import run
+from node_tank.config import DEFAULT_CONFIG_PATH, load_config
+from node_tank.driver import run
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="driver-tank: MQTT tank driver")
+    parser = argparse.ArgumentParser(description="node-tank: MQTT tank node")
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
     parser.add_argument(
         "-c", "--config", default="config.ini", help="Path to local config.ini override"

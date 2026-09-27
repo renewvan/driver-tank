@@ -1,0 +1,15 @@
+[Unit]
+Description=node-tank MQTT node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/node-tank
+ExecStart=/opt/node-tank/.venv/bin/python -m node_tank.main --config /opt/node-tank/config.ini
+Restart=on-failure
+RestartSec=5
+User=renewvan
+
+[Install]
+WantedBy=multi-user.target

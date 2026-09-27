@@ -1,7 +1,7 @@
 """Publish loop: ADC read -> calibration math -> renewvan/tank/<id>/<property>.
 
 Field/topic shape per hub's schema/tank.schema.json and
-docs/porting-dbus-driver-to-mqtt.md: fluid_type/capacity_l published
+docs/porting-dbus-to-mqtt-node.md: fluid_type/capacity_l published
 retained at startup (identity fields, rarely change), level_pct/status
 republished retained on every read (live fields).
 """
@@ -11,9 +11,9 @@ import json
 import logging
 import time
 
-from driver_tank.adc import ADS1115
-from driver_tank.config import AppConfig, TankConfig
-from driver_tank.publisher import Publisher
+from node_tank.adc import ADS1115
+from node_tank.config import AppConfig, TankConfig
+from node_tank.publisher import Publisher
 
 logger = logging.getLogger(__name__)
 
