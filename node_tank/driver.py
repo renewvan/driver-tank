@@ -4,54 +4,308 @@ Field/topic shape per hub's schema/tank.schema.json and
 docs/porting-dbus-to-mqtt-node.md: fluid_type/capacity_l published
 retained at startup (identity fields, rarely change), level_pct/status
 republished retained on every read (live fields).
+
+Additional publishers per spec (tickets 02, 05, 06):
+- alarm_state: live field if alarm is configured
+- temperature_c: live field if DS18B20 is configured
+- last_inspected_date: identity field, command via /set topic (unretained)
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 import time
+from datetime import datetime
+from pathlib import Path
+from dataclasses import dataclass, field
 
 from node_tank.adc import ADS1115
 from node_tank.config import AppConfig, TankConfig
 from node_tank.publisher import Publisher
+from node_tank.temperature import DS18B20
 
 logger = logging.getLogger(__name__)
 
 _PGA_DEFAULT = 4.096
+
+# State directory for machine-written persistence (ticket 06)
+_STATE_DIR = Path(__file__).resolve().parent.parent / "state"
+
+
+@dataclass
+class AlarmState:
+    """Per-tank alarm state tracking (ticket 02)."""
+    previous_state: str = "ok"  # "ok" or "alarm"
+    delay_timer_start: float | None = None  # Time when threshold was crossed
+
+
+@dataclass
+class TankState:
+    """Per-tank runtime state."""
+    alarm: AlarmState = field(default_factory=AlarmState)
+    last_inspected_date: str | None = None  # Most recent persisted date (YYYY-MM-DD)
 
 
 def _topic(tank_id: str, prop: str) -> str:
     return f"renewvan/tank/{tank_id}/{prop}"
 
 
-def publish_identity(publisher: Publisher, tank: TankConfig) -> None:
+def _ensure_state_dir() -> None:
+    """Ensure state directory exists for persistence (ticket 06)."""
+    _STATE_DIR.mkdir(exist_ok=True, parents=True)
+
+
+def _load_last_inspected_date(tank_id: str) -> str | None:
+    """Load persisted last_inspected_date from state file (ticket 06)."""
+    state_file = _STATE_DIR / f"{tank_id}.json"
+    if not state_file.exists():
+        return None
+    try:
+        data = json.loads(state_file.read_text())
+        return data.get("last_inspected_date")
+    except Exception as e:
+        logger.warning(f"Failed to load state for tank={tank_id}: {e}")
+        return None
+
+
+def _save_last_inspected_date(tank_id: str, date_str: str) -> None:
+    """Persist last_inspected_date to state file (ticket 06)."""
+    state_file = _STATE_DIR / f"{tank_id}.json"
+    try:
+        state_file.write_text(json.dumps({"last_inspected_date": date_str}))
+    except Exception as e:
+        logger.error(f"Failed to save state for tank={tank_id}: {e}")
+
+
+def _validate_last_inspected_date(date_str: str) -> bool:
+    """Validate YYYY-MM-DD format and reject future dates (ticket 06)."""
+    # Format validation
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
+        return False
+    try:
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+        today = datetime.now().date()
+        if date_obj > today:
+            return False
+        return True
+    except ValueError:
+        return False
+
+
+def publish_identity(publisher: Publisher, tank: TankConfig, tank_state: TankState) -> None:
+    """Publish identity fields at startup (ticket 01, 06).
+    
+    Identity fields (retained, published once at startup):
+    - fluid_type, capacity_l (always)
+    - last_inspected_date (only if loaded from state file)
+    """
     publisher.publish(_topic(tank.id, "fluid_type"), json.dumps(tank.fluid_type))
     publisher.publish(_topic(tank.id, "capacity_l"), json.dumps(tank.capacity_l))
+    
+    # Republish last_inspected_date if it was persisted (ticket 06)
+    if tank_state.last_inspected_date is not None:
+        publisher.publish(
+            _topic(tank.id, "last_inspected_date"),
+            json.dumps(tank_state.last_inspected_date)
+        )
 
 
-def read_and_publish(publisher: Publisher, adc: ADS1115, tank: TankConfig) -> None:
+def _compute_alarm_state(
+    tank: TankConfig,
+    level_pct: float,
+    status: str,
+    alarm_state_obj: AlarmState,
+    now: float,
+) -> tuple[str, AlarmState]:
+    """Compute alarm state based on level, status, and hysteresis (ticket 02).
+    
+    Returns:
+        (new_alarm_state_str, updated_AlarmState)
+    """
+    # Sensor fault forces alarm immediately
+    if status in ("open_circuit", "short_circuit"):
+        return "alarm", AlarmState(previous_state="alarm")
+    
+    if tank.alarm_direction is None:
+        # Alarm not configured
+        return alarm_state_obj.previous_state, alarm_state_obj
+    
+    # Start delay timer if we're crossing into threshold
+    if alarm_state_obj.delay_timer_start is None:
+        if tank.alarm_direction == "low" and level_pct <= tank.alarm_threshold:
+            # Crossed into low-level threshold
+            alarm_state_obj = AlarmState(
+                previous_state=alarm_state_obj.previous_state,
+                delay_timer_start=now if tank.alarm_delay_s > 0 else None,
+            )
+        elif tank.alarm_direction == "high" and level_pct >= tank.alarm_threshold:
+            # Crossed into high-level threshold
+            alarm_state_obj = AlarmState(
+                previous_state=alarm_state_obj.previous_state,
+                delay_timer_start=now if tank.alarm_delay_s > 0 else None,
+            )
+    
+    # Check if delay has elapsed
+    if alarm_state_obj.delay_timer_start is not None:
+        elapsed = now - alarm_state_obj.delay_timer_start
+        if elapsed < tank.alarm_delay_s:
+            # Delay not yet elapsed, keep current state
+            return alarm_state_obj.previous_state, alarm_state_obj
+    
+    # Hysteresis logic
+    new_state = alarm_state_obj.previous_state
+    
+    if alarm_state_obj.previous_state == "ok":
+        # Check if we've crossed into alarm threshold
+        if tank.alarm_direction == "low" and level_pct <= tank.alarm_threshold:
+            new_state = "alarm"
+        elif tank.alarm_direction == "high" and level_pct >= tank.alarm_threshold:
+            new_state = "alarm"
+    elif alarm_state_obj.previous_state == "alarm":
+        # Check if we've crossed into restore threshold
+        if tank.alarm_direction == "low" and level_pct >= tank.alarm_restore:
+            new_state = "ok"
+        elif tank.alarm_direction == "high" and level_pct <= tank.alarm_restore:
+            new_state = "ok"
+    
+    # Reset delay timer if state changed
+    if new_state != alarm_state_obj.previous_state:
+        return new_state, AlarmState(previous_state=new_state)
+    
+    # Reset delay timer if we're no longer near threshold
+    if alarm_state_obj.delay_timer_start is not None:
+        if tank.alarm_direction == "low" and level_pct > tank.alarm_threshold:
+            return new_state, AlarmState(previous_state=new_state)
+        elif tank.alarm_direction == "high" and level_pct < tank.alarm_threshold:
+            return new_state, AlarmState(previous_state=new_state)
+    
+    return new_state, AlarmState(previous_state=new_state)
+
+
+def read_and_publish(
+    publisher: Publisher,
+    adc: ADS1115,
+    tank: TankConfig,
+    tank_state: TankState,
+    temperature_sensors: dict[str, DS18B20],
+    now: float,
+) -> None:
+    """Read sensors and publish live fields (ticket 01, 02, 05).
+    
+    Live fields (retained, republished on every read):
+    - level_pct, status (always)
+    - alarm_state (if alarm is configured)
+    - temperature_c (if DS18B20 is configured)
+    """
+    # Read level from ADS1115
     voltage = adc.read_voltage(tank.channel, _PGA_DEFAULT)
     level_pct, status = tank.calibration.read(voltage)
     publisher.publish(_topic(tank.id, "level_pct"), json.dumps(round(level_pct, 1)))
     publisher.publish(_topic(tank.id, "status"), json.dumps(status.value))
+    
+    # Compute and publish alarm state (ticket 02)
+    new_alarm_state, updated_alarm_state = _compute_alarm_state(
+        tank, level_pct, status.value, tank_state.alarm, now
+    )
+    tank_state.alarm = updated_alarm_state
+    if tank.alarm_direction is not None:
+        publisher.publish(_topic(tank.id, "alarm_state"), json.dumps(new_alarm_state))
+    
+    # Read and publish temperature if configured (ticket 05)
+    if tank.temp_sensor_id is not None:
+        if tank.temp_sensor_id not in temperature_sensors:
+            try:
+                temperature_sensors[tank.temp_sensor_id] = DS18B20(tank.temp_sensor_id)
+            except FileNotFoundError as e:
+                logger.warning(f"Tank {tank.id}: {e}")
+                return
+        
+        try:
+            temp_c = temperature_sensors[tank.temp_sensor_id].read_temperature_c()
+            publisher.publish(_topic(tank.id, "temperature_c"), json.dumps(round(temp_c, 2)))
+        except ValueError as e:
+            logger.warning(f"Tank {tank.id}: Failed to read temperature: {e}")
+    
     logger.info(
-        "tank=%s voltage=%.4fV level_pct=%.1f status=%s", tank.id, voltage, level_pct, status.value
+        "tank=%s voltage=%.4fV level_pct=%.1f status=%s alarm=%s",
+        tank.id,
+        voltage,
+        level_pct,
+        status.value,
+        new_alarm_state if tank.alarm_direction else "n/a",
     )
 
 
+def _handle_last_inspected_date_command(
+    publisher: Publisher,
+    tank: TankConfig,
+    tank_state: TankState,
+    payload: str,
+) -> None:
+    """Handle last_inspected_date/set command topic (ticket 06)."""
+    try:
+        # Payload should be a JSON string: "2026-09-29"
+        date_str = json.loads(payload)
+    except json.JSONDecodeError:
+        logger.error(f"Tank {tank.id}: Invalid JSON in last_inspected_date/set: {payload}")
+        return
+    
+    # Validate format and reject future dates
+    if not _validate_last_inspected_date(date_str):
+        logger.error(
+            f"Tank {tank.id}: Invalid last_inspected_date: {date_str} "
+            "(must be YYYY-MM-DD and not a future date)"
+        )
+        return
+    
+    # Persist and publish
+    _save_last_inspected_date(tank.id, date_str)
+    tank_state.last_inspected_date = date_str
+    publisher.publish(_topic(tank.id, "last_inspected_date"), json.dumps(date_str))
+    logger.info(f"Tank {tank.id}: last_inspected_date set to {date_str}")
+
+
 def run(config: AppConfig) -> None:
+    """Main publish loop (ticket 01, 02, 05, 06)."""
+    _ensure_state_dir()
+    
     publisher = Publisher(config.mqtt)
     publisher.connect()
     adc = ADS1115(bus_number=config.i2c_bus, address=config.i2c_address)
-
+    
+    # Initialize tank state objects
+    tank_states: dict[str, TankState] = {}
     for tank in config.tanks:
-        publish_identity(publisher, tank)
-
+        tank_state = TankState()
+        # Load persisted last_inspected_date (ticket 06)
+        tank_state.last_inspected_date = _load_last_inspected_date(tank.id)
+        tank_states[tank.id] = tank_state
+    
+    # Temperature sensor cache (ticket 05)
+    temperature_sensors: dict[str, DS18B20] = {}
+    
+    # Publish identity fields at startup
+    for tank in config.tanks:
+        publish_identity(publisher, tank, tank_states[tank.id])
+    
+    # Subscribe to last_inspected_date/set command topics (ticket 06)
+    for tank in config.tanks:
+        topic = _topic(tank.id, "last_inspected_date/set")
+        def make_callback(t: TankConfig) -> callable:
+            def callback(payload: str) -> None:
+                _handle_last_inspected_date_command(publisher, t, tank_states[t.id], payload)
+            return callback
+        publisher.subscribe(topic, make_callback(tank))
+    
     try:
         while True:
+            now = time.time()
             for tank in config.tanks:
                 try:
-                    read_and_publish(publisher, adc, tank)
+                    read_and_publish(
+                        publisher, adc, tank, tank_states[tank.id], temperature_sensors, now
+                    )
                 except Exception:
                     logger.exception("Read failed for tank=%s", tank.id)
             time.sleep(min(t.update_interval_ms for t in config.tanks) / 1000.0)
