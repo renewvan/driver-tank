@@ -9,6 +9,13 @@ Additional publishers per spec (tickets 02, 05, 06):
 - alarm_state: live field if alarm is configured
 - temperature_c: live field if DS18B20 is configured
 - last_inspected_date: identity field, command via /set topic (unretained)
+
+Persistence boundary (ticket 06): config.py's config.ini is install-time
+and load-only, never machine-written (see config.py's docstring). This
+module introduces a *separate*, machine-written state/<tank_id>.json
+directory for the one piece of runtime state that must survive a
+restart (last_inspected_date) -- distinct from config, never read by
+config.py, gitignored like config.ini.
 """
 from __future__ import annotations
 
@@ -111,6 +118,19 @@ def publish_identity(publisher: Publisher, tank: TankConfig, tank_state: TankSta
         )
 
 
+def _crossed(direction: str, level_pct: float, boundary: float, entering_alarm: bool) -> bool:
+    """True if level_pct has crossed past boundary for this transition.
+
+    Entering alarm moves *toward* the configured direction (low: <=,
+    high: >=); restoring to ok moves back the *opposite* way (low: >=,
+    high: <=) -- entry and restore boundaries are approached from
+    opposite sides, so the comparison flips between them.
+    """
+    if direction == "low":
+        return level_pct <= boundary if entering_alarm else level_pct >= boundary
+    return level_pct >= boundary if entering_alarm else level_pct <= boundary
+
+
 def _compute_alarm_state(
     tank: TankConfig,
     level_pct: float,
@@ -118,69 +138,41 @@ def _compute_alarm_state(
     alarm_state_obj: AlarmState,
     now: float,
 ) -> tuple[str, AlarmState]:
-    """Compute alarm state based on level, status, and hysteresis (ticket 02).
-    
+    """Compute alarm state with hysteresis + optional delay (ticket 02).
+
+    Sensor faults force alarm immediately. Otherwise a pending transition
+    (ok->alarm on crossing alarm_threshold, or alarm->ok on crossing
+    alarm_restore) is deferred by alarm_delay_s if set, and cancelled if
+    the level moves back off the crossed boundary before the delay
+    elapses. Delay applies symmetrically to both transition directions.
+
     Returns:
         (new_alarm_state_str, updated_AlarmState)
     """
-    # Sensor fault forces alarm immediately
     if status in ("open_circuit", "short_circuit"):
         return "alarm", AlarmState(previous_state="alarm")
-    
+
     if tank.alarm_direction is None:
-        # Alarm not configured
         return alarm_state_obj.previous_state, alarm_state_obj
-    
-    # Start delay timer if we're crossing into threshold
-    if alarm_state_obj.delay_timer_start is None:
-        if tank.alarm_direction == "low" and level_pct <= tank.alarm_threshold:
-            # Crossed into low-level threshold
-            alarm_state_obj = AlarmState(
-                previous_state=alarm_state_obj.previous_state,
-                delay_timer_start=now if tank.alarm_delay_s > 0 else None,
-            )
-        elif tank.alarm_direction == "high" and level_pct >= tank.alarm_threshold:
-            # Crossed into high-level threshold
-            alarm_state_obj = AlarmState(
-                previous_state=alarm_state_obj.previous_state,
-                delay_timer_start=now if tank.alarm_delay_s > 0 else None,
-            )
-    
-    # Check if delay has elapsed
-    if alarm_state_obj.delay_timer_start is not None:
-        elapsed = now - alarm_state_obj.delay_timer_start
-        if elapsed < tank.alarm_delay_s:
-            # Delay not yet elapsed, keep current state
-            return alarm_state_obj.previous_state, alarm_state_obj
-    
-    # Hysteresis logic
-    new_state = alarm_state_obj.previous_state
-    
-    if alarm_state_obj.previous_state == "ok":
-        # Check if we've crossed into alarm threshold
-        if tank.alarm_direction == "low" and level_pct <= tank.alarm_threshold:
-            new_state = "alarm"
-        elif tank.alarm_direction == "high" and level_pct >= tank.alarm_threshold:
-            new_state = "alarm"
-    elif alarm_state_obj.previous_state == "alarm":
-        # Check if we've crossed into restore threshold
-        if tank.alarm_direction == "low" and level_pct >= tank.alarm_restore:
-            new_state = "ok"
-        elif tank.alarm_direction == "high" and level_pct <= tank.alarm_restore:
-            new_state = "ok"
-    
-    # Reset delay timer if state changed
-    if new_state != alarm_state_obj.previous_state:
-        return new_state, AlarmState(previous_state=new_state)
-    
-    # Reset delay timer if we're no longer near threshold
-    if alarm_state_obj.delay_timer_start is not None:
-        if tank.alarm_direction == "low" and level_pct > tank.alarm_threshold:
-            return new_state, AlarmState(previous_state=new_state)
-        elif tank.alarm_direction == "high" and level_pct < tank.alarm_threshold:
-            return new_state, AlarmState(previous_state=new_state)
-    
-    return new_state, AlarmState(previous_state=new_state)
+
+    previous = alarm_state_obj.previous_state
+    entering_alarm = previous == "ok"
+    boundary = tank.alarm_threshold if entering_alarm else tank.alarm_restore
+    target_state = "alarm" if entering_alarm else "ok"
+    pending = _crossed(tank.alarm_direction, level_pct, boundary, entering_alarm)
+
+    if not pending:
+        # Not past the relevant boundary: no pending transition, clear any timer.
+        return previous, AlarmState(previous_state=previous)
+
+    delay_start = now if alarm_state_obj.delay_timer_start is None else alarm_state_obj.delay_timer_start
+
+    if tank.alarm_delay_s > 0 and (now - delay_start) < tank.alarm_delay_s:
+        # Still within delay window: hold current state, keep timer running.
+        return previous, AlarmState(previous_state=previous, delay_timer_start=delay_start)
+
+    # Delay elapsed (or no delay configured): commit the transition.
+    return target_state, AlarmState(previous_state=target_state)
 
 
 def read_and_publish(

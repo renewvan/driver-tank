@@ -59,6 +59,8 @@ class Publisher:
                 self._subscriptions[topic](payload)
             except Exception:
                 logger.exception(f"Error handling message on topic {topic}")
+        else:
+            logger.debug(f"Ignoring message on unsubscribed topic {topic}")
 
     def connect(self) -> None:
         self._client.connect(self._config.host, self._config.port)
