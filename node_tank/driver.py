@@ -394,6 +394,8 @@ def _smoothed_level_pct(
     if flow_state.edge_level_pct is None or flow_state.edge_time is None:
         return level_pct
 
+    # Signed rate: safe to subtract because _compute_flow_rates guarantees
+    # only one of last_fill_rate/last_drain_rate is ever nonzero at a time.
     rate_lpm = flow_state.last_fill_rate - flow_state.last_drain_rate
     if rate_lpm == 0.0 or tank.capacity_l <= 0:
         return level_pct
@@ -411,7 +413,6 @@ def _smoothed_level_pct(
     if pct_per_min > 0:
         return max(level_pct, extrapolated)
     return min(level_pct, extrapolated)
-
 
 
 def _compute_one_shot_latch(
