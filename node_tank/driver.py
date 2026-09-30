@@ -278,6 +278,38 @@ def _compute_flow_rates(
     return flow_state.last_fill_rate, flow_state.last_drain_rate, flow_state
 
 
+def _compute_one_shot_latch(
+    in_band: bool,
+    latched: bool,
+    delay_start: float | None,
+    now: float,
+    delay_s: float,
+) -> tuple[str | None, bool, float | None]:
+    """One-shot latch: commits today's date once per sustained excursion into
+    a band (flow-rate-full-empty-telemetry ticket 02). Shared building block
+    for both the full-direction and empty-direction latches in
+    _compute_full_empty_state -- mirrors how _crossed() is shared by both
+    alarm directions in _compute_alarm_state.
+
+    Out of band: clears latch/timer (re-arms). In band, not latched: starts
+    the timer on first entry, commits once delay_s elapses (or immediately
+    if delay_s <= 0). In band, already latched: no-op. Leaving before the
+    delay elapses (i.e. in_band=False while a timer was pending) cancels
+    the pending commit -- same cancel-on-retreat behavior as _compute_alarm_state.
+
+    Returns:
+        (committed_date_str | None, new_latched, new_delay_start)
+    """
+    if not in_band:
+        return None, False, None
+    if latched:
+        return None, True, delay_start
+    delay_start = now if delay_start is None else delay_start
+    if delay_s <= 0 or (now - delay_start) >= delay_s:
+        return date.today().isoformat(), True, None
+    return None, False, delay_start
+
+
 def _compute_full_empty_state(
     tank: TankConfig,
     level_pct: float,
@@ -287,43 +319,27 @@ def _compute_full_empty_state(
     """Compute last_full_date/last_empty_date one-shot latches
     (flow-rate-full-empty-telemetry ticket 02).
 
-    Two independent latches, structurally identical, one per direction.
-    Per direction: leaving the in-band range clears the latch and timer
-    (re-arming for the next excursion); entering the band starts the
-    delay timer (reusing tank.alarm_delay_s) if not already latched, and
-    commits date.today() once the delay elapses (immediately if
-    alarm_delay_s <= 0); staying in-band while already latched is a
-    no-op; leaving before the delay elapses cancels the pending commit --
-    same cancel-on-retreat behavior as _compute_alarm_state.
+    Two independent latches, one per direction, both delegating to
+    _compute_one_shot_latch.
 
     Returns:
         (last_full_date | None, last_empty_date | None, updated_FullEmptyState)
         -- the date fields are only non-None on the read where a commit happens.
     """
-    full_latched = full_empty_state.full_latched
-    full_delay_start = full_empty_state.full_delay_start
-    committed_full: str | None = None
-
-    if level_pct < tank.full_threshold_pct:
-        full_latched, full_delay_start = False, None
-    elif not full_latched:
-        full_delay_start = now if full_delay_start is None else full_delay_start
-        if tank.alarm_delay_s <= 0 or (now - full_delay_start) >= tank.alarm_delay_s:
-            committed_full = date.today().isoformat()
-            full_latched, full_delay_start = True, None
-
-    empty_latched = full_empty_state.empty_latched
-    empty_delay_start = full_empty_state.empty_delay_start
-    committed_empty: str | None = None
-
-    if level_pct > tank.empty_threshold_pct:
-        empty_latched, empty_delay_start = False, None
-    elif not empty_latched:
-        empty_delay_start = now if empty_delay_start is None else empty_delay_start
-        if tank.alarm_delay_s <= 0 or (now - empty_delay_start) >= tank.alarm_delay_s:
-            committed_empty = date.today().isoformat()
-            empty_latched, empty_delay_start = True, None
-
+    committed_full, full_latched, full_delay_start = _compute_one_shot_latch(
+        in_band=level_pct >= tank.full_threshold_pct,
+        latched=full_empty_state.full_latched,
+        delay_start=full_empty_state.full_delay_start,
+        now=now,
+        delay_s=tank.alarm_delay_s,
+    )
+    committed_empty, empty_latched, empty_delay_start = _compute_one_shot_latch(
+        in_band=level_pct <= tank.empty_threshold_pct,
+        latched=full_empty_state.empty_latched,
+        delay_start=full_empty_state.empty_delay_start,
+        now=now,
+        delay_s=tank.alarm_delay_s,
+    )
     return committed_full, committed_empty, FullEmptyState(
         full_latched=full_latched, full_delay_start=full_delay_start,
         empty_latched=empty_latched, empty_delay_start=empty_delay_start,
