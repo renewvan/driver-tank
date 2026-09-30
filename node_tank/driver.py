@@ -231,14 +231,21 @@ def _migrate_timestamp_field(tank_id: str, new_key: str) -> str | None:
 
 
 def publish_identity(publisher: Publisher, tank: TankConfig, tank_state: TankState) -> None:
-    """Publish identity fields at startup (ticket 01, 06).
+    """Publish identity fields at startup (ticket 01, 06; hub schema v0.5 alarm config fields).
     
     Identity fields (retained, published once at startup):
     - fluid_type, capacity_l (always)
+    - alarm_direction, alarm_threshold_pct, alarm_restore_pct (only if alarm is configured --
+      same condition as alarm_state's live publication)
     - last_inspected_at, last_full_at, last_empty_at (only if loaded from state file)
     """
     publisher.publish(_topic(tank.id, "fluid_type"), json.dumps(tank.fluid_type))
     publisher.publish(_topic(tank.id, "capacity_l"), json.dumps(tank.capacity_l))
+
+    if tank.alarm_direction is not None:
+        publisher.publish(_topic(tank.id, "alarm_direction"), json.dumps(tank.alarm_direction))
+        publisher.publish(_topic(tank.id, "alarm_threshold_pct"), json.dumps(tank.alarm_threshold))
+        publisher.publish(_topic(tank.id, "alarm_restore_pct"), json.dumps(tank.alarm_restore))
     
     # Republish persisted identity timestamps if they were loaded from state (ticket 06;
     # last_full_at/last_empty_at added by flow-rate-full-empty-telemetry ticket 02,
