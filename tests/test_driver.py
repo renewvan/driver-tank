@@ -14,6 +14,7 @@ from node_tank.driver import (
     TankState,
     _compute_flow_rates,
     _compute_full_empty_state,
+    _compute_volume_since_latch,
     _handle_timestamp_set_command,
     _migrate_timestamp_field,
     _normalize_timestamp_str,
@@ -333,3 +334,137 @@ def test_migrate_timestamp_field_returns_none_when_no_state_file(tmp_path, monke
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     assert _migrate_timestamp_field("fresh", "last_full_at") is None
+
+
+# --- _compute_volume_since_latch -------------------------------------------
+
+
+def test_volume_since_latch_is_zero_at_the_commit_level():
+    tank = make_tank(capacity_l=100.0)
+    full, empty = _compute_volume_since_latch(
+        tank, level_pct=99.5, level_pct_at_full_commit=99.5, level_pct_at_empty_commit=None
+    )
+    assert full == 0.0
+    assert empty == 0.0
+
+
+def test_volume_since_latch_computes_net_delta_from_full_commit():
+    tank = make_tank(capacity_l=100.0)
+    # Drained 20 points off a full commit at 99.5 -> 20% of 100L = 20L.
+    full, empty = _compute_volume_since_latch(
+        tank, level_pct=79.5, level_pct_at_full_commit=99.5, level_pct_at_empty_commit=None
+    )
+    assert full == 20.0
+    assert empty == 0.0
+
+
+def test_volume_since_latch_computes_net_delta_from_empty_commit():
+    tank = make_tank(capacity_l=100.0)
+    # Filled 15 points up from an empty commit at 0.5 -> 15% of 100L = 15L.
+    full, empty = _compute_volume_since_latch(
+        tank, level_pct=15.5, level_pct_at_full_commit=None, level_pct_at_empty_commit=0.5
+    )
+    assert full == 0.0
+    assert empty == 15.0
+
+
+def test_volume_since_latch_partial_top_off_shrinks_the_figure():
+    tank = make_tank(capacity_l=100.0)
+    # Drained to 70L used, then topped off back up to 10L used off the same
+    # full-commit anchor -- shrinks, no separate reset-on-refill bookkeeping.
+    drained, _ = _compute_volume_since_latch(
+        tank, level_pct=30.0, level_pct_at_full_commit=100.0, level_pct_at_empty_commit=None
+    )
+    topped_off, _ = _compute_volume_since_latch(
+        tank, level_pct=90.0, level_pct_at_full_commit=100.0, level_pct_at_empty_commit=None
+    )
+    assert drained == 70.0
+    assert topped_off == 10.0
+    assert topped_off < drained
+
+
+def test_volume_since_latch_is_zero_with_no_anchor_yet():
+    tank = make_tank(capacity_l=100.0)
+    # Covers both "never yet full/empty" and the upgrade case (a state file
+    # with last_full_at but no level_pct_at_full_commit).
+    full, empty = _compute_volume_since_latch(
+        tank, level_pct=55.0, level_pct_at_full_commit=None, level_pct_at_empty_commit=None
+    )
+    assert (full, empty) == (0.0, 0.0)
+
+
+# --- volume-since-latch restart durability (read_and_publish integration) -
+
+
+class _FakeADC:
+    def __init__(self, voltage: float):
+        self.voltage = voltage
+
+    def read_voltage(self, channel: int, pga) -> float:
+        return self.voltage
+
+
+def test_volume_since_full_l_survives_a_restart(monkeypatch, tmp_path):
+    """A fresh TankState seeded with a persisted level_pct_at_full_commit/
+    last_full_at pair (simulating a restart) reproduces the same
+    volume_since_full_l a live process would have shown pre-restart --
+    the anchor is identity data (persisted), not process-lifetime state."""
+    import node_tank.driver as driver_mod
+
+    monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
+    tank = make_tank(capacity_l=100.0)
+
+    # Pre-restart: a tank that committed full at level_pct=99.5, then drained.
+    pre_restart_state = TankState(
+        last_full_at="2020-06-15T00:00:00-04:00",
+        level_pct_at_full_commit=99.5,
+    )
+    pre_restart_volume, _ = _compute_volume_since_latch(
+        tank, level_pct=70.0, level_pct_at_full_commit=pre_restart_state.level_pct_at_full_commit,
+        level_pct_at_empty_commit=None,
+    )
+
+    # Simulate the restart: state/<tank_id>.json holds the persisted anchor,
+    # a fresh TankState is constructed and loaded the way run() does.
+    driver_mod._save_state_field("fresh", "last_full_at", "2020-06-15T00:00:00-04:00")
+    driver_mod._save_state_field("fresh", "level_pct_at_full_commit", 99.5)
+    post_restart_state = TankState()
+    post_restart_state.last_full_at = driver_mod._migrate_timestamp_field("fresh", "last_full_at")
+    post_restart_state.level_pct_at_full_commit = driver_mod._load_state_field(
+        "fresh", "level_pct_at_full_commit"
+    )
+
+    publisher = _FakePublisher()
+    adc = _FakeADC(voltage=0.0)  # irrelevant: Calibration.read is stubbed below
+    from node_tank.calibration import Calibration, Status
+    monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
+    driver_mod.read_and_publish(publisher, adc, tank, post_restart_state, {}, now=0.0)
+
+    published = dict(publisher.published)
+    post_restart_volume = json.loads(published["renewvan/tank/fresh/volume_since_full_l"])
+    assert post_restart_volume == round(pre_restart_volume, 2)
+
+
+def test_volume_since_full_l_is_zero_when_upgrading_without_an_anchor(monkeypatch, tmp_path):
+    """A state file with last_full_at but no level_pct_at_full_commit (an
+    install upgrading from before this feature existed) publishes 0 until
+    the next latch commit re-establishes both keys together."""
+    import node_tank.driver as driver_mod
+
+    monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
+    tank = make_tank(capacity_l=100.0, full_threshold_pct=99.0)
+
+    driver_mod._save_state_field("fresh", "last_full_at", "2020-06-15T00:00:00-04:00")
+    tank_state = TankState()
+    tank_state.last_full_at = driver_mod._migrate_timestamp_field("fresh", "last_full_at")
+    tank_state.level_pct_at_full_commit = driver_mod._load_state_field("fresh", "level_pct_at_full_commit")
+    assert tank_state.level_pct_at_full_commit is None
+
+    publisher = _FakePublisher()
+    adc = _FakeADC(voltage=0.0)  # irrelevant: Calibration.read is stubbed below
+    from node_tank.calibration import Calibration, Status
+    monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
+    driver_mod.read_and_publish(publisher, adc, tank, tank_state, {}, now=0.0)
+
+    published = dict(publisher.published)
+    assert json.loads(published["renewvan/tank/fresh/volume_since_full_l"]) == 0.0

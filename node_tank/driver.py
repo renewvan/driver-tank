@@ -90,6 +90,13 @@ class TankState:
     full_empty: FullEmptyState = field(default_factory=FullEmptyState)
     last_full_at: str | None = None  # Most recent persisted timestamp (ISO-8601, local offset)
     last_empty_at: str | None = None  # Most recent persisted timestamp (ISO-8601, local offset)
+    # Volume-since-latch anchors (volume-timestamp-telemetry ticket 02): level_pct
+    # at the moment last_full_at/last_empty_at last committed. Persisted (unlike
+    # FlowState/FullEmptyState) so volume_since_full_l/volume_since_empty_l survive
+    # a restart -- None means "no commit yet" (or a pre-upgrade state file with no
+    # anchor), and the derived field publishes 0 until the next commit.
+    level_pct_at_full_commit: float | None = None
+    level_pct_at_empty_commit: float | None = None
 
 
 def _topic(tank_id: str, prop: str) -> str:
@@ -101,11 +108,13 @@ def _ensure_state_dir() -> None:
     _STATE_DIR.mkdir(exist_ok=True, parents=True)
 
 
-def _load_state_field(tank_id: str, field_name: str) -> str | None:
+def _load_state_field(tank_id: str, field_name: str) -> str | float | None:
     """Load a single persisted field from state/<tank_id>.json (ticket 06).
 
-    Generic across last_inspected_at, last_full_at, last_empty_at --
-    all three share one file, one read/write helper (flow-rate-full-empty-telemetry ticket 02).
+    Generic across last_inspected_at, last_full_at, last_empty_at (str) and
+    level_pct_at_full_commit/level_pct_at_empty_commit (float,
+    volume-timestamp-telemetry ticket 02) -- all five share one file, one
+    read/write helper (flow-rate-full-empty-telemetry ticket 02).
     """
     state_file = _STATE_DIR / f"{tank_id}.json"
     if not state_file.exists():
@@ -118,12 +127,13 @@ def _load_state_field(tank_id: str, field_name: str) -> str | None:
         return None
 
 
-def _save_state_field(tank_id: str, field_name: str, value: str) -> None:
+def _save_state_field(tank_id: str, field_name: str, value: str | float) -> None:
     """Persist a single field to state/<tank_id>.json, merging with existing keys.
 
-    Read-modify-write so last_inspected_at/last_full_at/last_empty_at
-    (written independently, at different times) don't clobber each other
-    in the shared file (flow-rate-full-empty-telemetry ticket 02).
+    Read-modify-write so last_inspected_at/last_full_at/last_empty_at/
+    level_pct_at_full_commit/level_pct_at_empty_commit (written independently,
+    at different times) don't clobber each other in the shared file
+    (flow-rate-full-empty-telemetry ticket 02).
     """
     state_file = _STATE_DIR / f"{tank_id}.json"
     try:
@@ -426,6 +436,42 @@ def _compute_full_empty_state(
     )
 
 
+def _compute_volume_since_latch(
+    tank: TankConfig,
+    level_pct: float,
+    level_pct_at_full_commit: float | None,
+    level_pct_at_empty_commit: float | None,
+) -> tuple[float, float]:
+    """Compute volume_since_full_l/volume_since_empty_l -- net liters moved
+    since each direction's own last full/empty latch commit
+    (volume-timestamp-telemetry ticket 02).
+
+    Distinct from fill_rate_lpm/drain_rate_lpm (an instantaneous speed):
+    this is a running total against a fixed anchor -- the level_pct at
+    the moment the tank was last genuinely full/empty, captured by the
+    caller (read_and_publish) the instant _compute_full_empty_state
+    reports a commit -- not an edge-to-edge rate. No internal state of
+    its own: a pure function of current level and the two persisted
+    anchors. A partial top-off mid-drain correctly shrinks
+    volume_since_full_l (level_pct moves back toward the anchor) rather
+    than needing separate reset-on-refill logic.
+
+    0 when no commit of that direction has ever happened (anchor is
+    None) -- covers both "never yet full/empty" and the upgrade case (a
+    state file with last_full_at but no level_pct_at_full_commit, from
+    before this feature existed).
+
+    Returns:
+        (volume_since_full_l, volume_since_empty_l)
+    """
+    def _volume(anchor: float | None) -> float:
+        if anchor is None:
+            return 0.0
+        return abs(level_pct - anchor) / 100.0 * tank.capacity_l
+
+    return _volume(level_pct_at_full_commit), _volume(level_pct_at_empty_commit)
+
+
 def read_and_publish(
     publisher: Publisher,
     adc: ADS1115,
@@ -434,10 +480,12 @@ def read_and_publish(
     temperature_sensors: dict[str, DS18B20],
     now: float,
 ) -> None:
-    """Read sensors and publish live fields (ticket 01, 02, 05; flow-rate-full-empty-telemetry ticket 01/02).
+    """Read sensors and publish live fields (ticket 01, 02, 05; flow-rate-full-empty-telemetry ticket 01/02;
+    volume-timestamp-telemetry ticket 02).
     
     Live fields (retained, republished on every read):
     - level_pct, status, fill_rate_lpm, drain_rate_lpm (always)
+    - volume_since_full_l, volume_since_empty_l (always)
     - alarm_state (if alarm is configured)
     - temperature_c (if DS18B20 is configured)
     Identity fields republished only when they change:
@@ -475,11 +523,25 @@ def read_and_publish(
         tank_state.last_full_at = committed_full
         publisher.publish(_topic(tank.id, "last_full_at"), json.dumps(committed_full))
         logger.info(f"Tank {tank.id}: last_full_at auto-detected as {committed_full}")
+        # Anchor for volume_since_full_l is the level_pct at this exact commit
+        # (volume-timestamp-telemetry ticket 02) -- persisted so it survives a restart.
+        tank_state.level_pct_at_full_commit = level_pct
+        _save_state_field(tank.id, "level_pct_at_full_commit", level_pct)
     if committed_empty is not None:
         _save_state_field(tank.id, "last_empty_at", committed_empty)
         tank_state.last_empty_at = committed_empty
         publisher.publish(_topic(tank.id, "last_empty_at"), json.dumps(committed_empty))
         logger.info(f"Tank {tank.id}: last_empty_at auto-detected as {committed_empty}")
+        tank_state.level_pct_at_empty_commit = level_pct
+        _save_state_field(tank.id, "level_pct_at_empty_commit", level_pct)
+    
+    # Compute and publish volume-since-latch -- unconditional live fields
+    # (volume-timestamp-telemetry ticket 02)
+    volume_since_full_l, volume_since_empty_l = _compute_volume_since_latch(
+        tank, level_pct, tank_state.level_pct_at_full_commit, tank_state.level_pct_at_empty_commit
+    )
+    publisher.publish(_topic(tank.id, "volume_since_full_l"), json.dumps(round(volume_since_full_l, 2)))
+    publisher.publish(_topic(tank.id, "volume_since_empty_l"), json.dumps(round(volume_since_empty_l, 2)))
     
     # Read and publish temperature if configured (ticket 05)
     if tank.temp_sensor_id is not None:
@@ -566,6 +628,12 @@ def run(config: AppConfig) -> None:
         tank_state.last_inspected_at = _migrate_timestamp_field(tank.id, "last_inspected_at")
         tank_state.last_full_at = _migrate_timestamp_field(tank.id, "last_full_at")
         tank_state.last_empty_at = _migrate_timestamp_field(tank.id, "last_empty_at")
+        # Volume-since-latch anchors (volume-timestamp-telemetry ticket 02): survive
+        # a restart even though the derived volume_since_*_l field is live-cadence.
+        # None (no key present -- pre-upgrade state file) means "no anchor yet";
+        # _compute_volume_since_latch publishes 0 until the next latch commit.
+        tank_state.level_pct_at_full_commit = _load_state_field(tank.id, "level_pct_at_full_commit")
+        tank_state.level_pct_at_empty_commit = _load_state_field(tank.id, "level_pct_at_empty_commit")
         tank_states[tank.id] = tank_state
     
     # Temperature sensor cache (ticket 05)
