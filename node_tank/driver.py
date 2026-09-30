@@ -23,7 +23,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -48,10 +48,32 @@ class AlarmState:
 
 
 @dataclass
+class FlowState:
+    """Per-tank fill/drain flow-rate tracking (flow-rate-full-empty-telemetry ticket 01)."""
+    edge_level_pct: float | None = None  # level_pct at the last qualifying edge, None until first read
+    edge_time: float | None = None  # timestamp of the last qualifying edge
+    last_fill_rate: float = 0.0  # last-published fill_rate_lpm
+    last_drain_rate: float = 0.0  # last-published drain_rate_lpm
+
+
+@dataclass
+class FullEmptyState:
+    """Per-tank last-full/last-empty one-shot latch tracking (flow-rate-full-empty-telemetry ticket 02)."""
+    full_latched: bool = False
+    full_delay_start: float | None = None
+    empty_latched: bool = False
+    empty_delay_start: float | None = None
+
+
+@dataclass
 class TankState:
     """Per-tank runtime state."""
     alarm: AlarmState = field(default_factory=AlarmState)
     last_inspected_date: str | None = None  # Most recent persisted date (YYYY-MM-DD)
+    flow: FlowState = field(default_factory=FlowState)
+    full_empty: FullEmptyState = field(default_factory=FullEmptyState)
+    last_full_date: str | None = None  # Most recent persisted date (YYYY-MM-DD)
+    last_empty_date: str | None = None  # Most recent persisted date (YYYY-MM-DD)
 
 
 def _topic(tank_id: str, prop: str) -> str:
@@ -63,30 +85,50 @@ def _ensure_state_dir() -> None:
     _STATE_DIR.mkdir(exist_ok=True, parents=True)
 
 
-def _load_last_inspected_date(tank_id: str) -> str | None:
-    """Load persisted last_inspected_date from state file (ticket 06)."""
+def _load_state_field(tank_id: str, field_name: str) -> str | None:
+    """Load a single persisted date field from state/<tank_id>.json (ticket 06).
+
+    Generic across last_inspected_date, last_full_date, last_empty_date --
+    all three share one file, one read/write helper (flow-rate-full-empty-telemetry ticket 02).
+    """
     state_file = _STATE_DIR / f"{tank_id}.json"
     if not state_file.exists():
         return None
     try:
         data = json.loads(state_file.read_text())
-        return data.get("last_inspected_date")
+        return data.get(field_name)
     except Exception as e:
         logger.warning(f"Failed to load state for tank={tank_id}: {e}")
         return None
 
 
-def _save_last_inspected_date(tank_id: str, date_str: str) -> None:
-    """Persist last_inspected_date to state file (ticket 06)."""
+def _save_state_field(tank_id: str, field_name: str, date_str: str) -> None:
+    """Persist a single date field to state/<tank_id>.json, merging with existing keys.
+
+    Read-modify-write so last_inspected_date/last_full_date/last_empty_date
+    (written independently, at different times) don't clobber each other
+    in the shared file (flow-rate-full-empty-telemetry ticket 02).
+    """
     state_file = _STATE_DIR / f"{tank_id}.json"
     try:
-        state_file.write_text(json.dumps({"last_inspected_date": date_str}))
+        data = {}
+        if state_file.exists():
+            try:
+                data = json.loads(state_file.read_text())
+            except Exception:
+                data = {}
+        data[field_name] = date_str
+        state_file.write_text(json.dumps(data))
     except Exception as e:
         logger.error(f"Failed to save state for tank={tank_id}: {e}")
 
 
-def _validate_last_inspected_date(date_str: str) -> bool:
-    """Validate YYYY-MM-DD format and reject future dates (ticket 06)."""
+def _validate_date_str(date_str: str) -> bool:
+    """Validate YYYY-MM-DD format and reject future dates (ticket 06).
+
+    Shared by last_inspected_date, last_full_date, last_empty_date
+    /set command handlers (flow-rate-full-empty-telemetry ticket 02).
+    """
     # Format validation
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
         return False
@@ -105,16 +147,27 @@ def publish_identity(publisher: Publisher, tank: TankConfig, tank_state: TankSta
     
     Identity fields (retained, published once at startup):
     - fluid_type, capacity_l (always)
-    - last_inspected_date (only if loaded from state file)
+    - last_inspected_date, last_full_date, last_empty_date (only if loaded from state file)
     """
     publisher.publish(_topic(tank.id, "fluid_type"), json.dumps(tank.fluid_type))
     publisher.publish(_topic(tank.id, "capacity_l"), json.dumps(tank.capacity_l))
     
-    # Republish last_inspected_date if it was persisted (ticket 06)
+    # Republish persisted identity dates if they were loaded from state (ticket 06;
+    # last_full_date/last_empty_date added by flow-rate-full-empty-telemetry ticket 02)
     if tank_state.last_inspected_date is not None:
         publisher.publish(
             _topic(tank.id, "last_inspected_date"),
             json.dumps(tank_state.last_inspected_date)
+        )
+    if tank_state.last_full_date is not None:
+        publisher.publish(
+            _topic(tank.id, "last_full_date"),
+            json.dumps(tank_state.last_full_date)
+        )
+    if tank_state.last_empty_date is not None:
+        publisher.publish(
+            _topic(tank.id, "last_empty_date"),
+            json.dumps(tank_state.last_empty_date)
         )
 
 
@@ -175,6 +228,124 @@ def _compute_alarm_state(
     return target_state, AlarmState(previous_state=target_state)
 
 
+def _compute_flow_rates(
+    tank: TankConfig,
+    level_pct: float,
+    now: float,
+    flow_state: FlowState,
+) -> tuple[float, float, FlowState]:
+    """Compute fill_rate_lpm/drain_rate_lpm from edge-to-edge level_pct changes
+    (flow-rate-full-empty-telemetry ticket 01).
+
+    Tracks the last level_pct reading that differed from the stored "edge"
+    sample by at least flow_min_delta_pct. A qualifying delta moves the edge
+    and computes a fresh rate; sub-threshold deltas are noise and are
+    ignored (edge and published rate both hold). If flow_idle_timeout_s
+    elapses with no qualifying edge, both rates drop to 0 -- but the edge
+    itself is NOT moved, so a later resumed fill/drain is still measured
+    from the last real level change, not from the idle-timeout instant.
+
+    Returns:
+        (fill_rate_lpm, drain_rate_lpm, updated_FlowState)
+    """
+    if flow_state.edge_level_pct is None:
+        # First read of the process: no edge yet, nothing to compare against.
+        return 0.0, 0.0, FlowState(edge_level_pct=level_pct, edge_time=now)
+
+    delta = level_pct - flow_state.edge_level_pct
+
+    if abs(delta) >= tank.flow_min_delta_pct:
+        elapsed_s = now - flow_state.edge_time
+        elapsed_min = elapsed_s / 60.0 if elapsed_s > 0 else 0.0
+        rate = (abs(delta) / 100.0 * tank.capacity_l / elapsed_min) if elapsed_min > 0 else 0.0
+        if delta > 0:
+            fill_rate, drain_rate = rate, 0.0
+        else:
+            fill_rate, drain_rate = 0.0, rate
+        return fill_rate, drain_rate, FlowState(
+            edge_level_pct=level_pct, edge_time=now,
+            last_fill_rate=fill_rate, last_drain_rate=drain_rate,
+        )
+
+    if (now - flow_state.edge_time) >= tank.flow_idle_timeout_s:
+        # No qualifying edge for a while: flow has stopped. Edge stays put.
+        return 0.0, 0.0, FlowState(
+            edge_level_pct=flow_state.edge_level_pct, edge_time=flow_state.edge_time,
+            last_fill_rate=0.0, last_drain_rate=0.0,
+        )
+
+    # In band, no timeout yet: hold the last-published rate.
+    return flow_state.last_fill_rate, flow_state.last_drain_rate, flow_state
+
+
+def _compute_one_shot_latch(
+    in_band: bool,
+    latched: bool,
+    delay_start: float | None,
+    now: float,
+    delay_s: float,
+) -> tuple[str | None, bool, float | None]:
+    """One-shot latch: commits today's date once per sustained excursion into
+    a band (flow-rate-full-empty-telemetry ticket 02). Shared building block
+    for both the full-direction and empty-direction latches in
+    _compute_full_empty_state -- mirrors how _crossed() is shared by both
+    alarm directions in _compute_alarm_state.
+
+    Out of band: clears latch/timer (re-arms). In band, not latched: starts
+    the timer on first entry, commits once delay_s elapses (or immediately
+    if delay_s <= 0). In band, already latched: no-op. Leaving before the
+    delay elapses (i.e. in_band=False while a timer was pending) cancels
+    the pending commit -- same cancel-on-retreat behavior as _compute_alarm_state.
+
+    Returns:
+        (committed_date_str | None, new_latched, new_delay_start)
+    """
+    if not in_band:
+        return None, False, None
+    if latched:
+        return None, True, delay_start
+    delay_start = now if delay_start is None else delay_start
+    if delay_s <= 0 or (now - delay_start) >= delay_s:
+        return date.today().isoformat(), True, None
+    return None, False, delay_start
+
+
+def _compute_full_empty_state(
+    tank: TankConfig,
+    level_pct: float,
+    now: float,
+    full_empty_state: FullEmptyState,
+) -> tuple[str | None, str | None, FullEmptyState]:
+    """Compute last_full_date/last_empty_date one-shot latches
+    (flow-rate-full-empty-telemetry ticket 02).
+
+    Two independent latches, one per direction, both delegating to
+    _compute_one_shot_latch.
+
+    Returns:
+        (last_full_date | None, last_empty_date | None, updated_FullEmptyState)
+        -- the date fields are only non-None on the read where a commit happens.
+    """
+    committed_full, full_latched, full_delay_start = _compute_one_shot_latch(
+        in_band=level_pct >= tank.full_threshold_pct,
+        latched=full_empty_state.full_latched,
+        delay_start=full_empty_state.full_delay_start,
+        now=now,
+        delay_s=tank.alarm_delay_s,
+    )
+    committed_empty, empty_latched, empty_delay_start = _compute_one_shot_latch(
+        in_band=level_pct <= tank.empty_threshold_pct,
+        latched=full_empty_state.empty_latched,
+        delay_start=full_empty_state.empty_delay_start,
+        now=now,
+        delay_s=tank.alarm_delay_s,
+    )
+    return committed_full, committed_empty, FullEmptyState(
+        full_latched=full_latched, full_delay_start=full_delay_start,
+        empty_latched=empty_latched, empty_delay_start=empty_delay_start,
+    )
+
+
 def read_and_publish(
     publisher: Publisher,
     adc: ADS1115,
@@ -183,12 +354,14 @@ def read_and_publish(
     temperature_sensors: dict[str, DS18B20],
     now: float,
 ) -> None:
-    """Read sensors and publish live fields (ticket 01, 02, 05).
+    """Read sensors and publish live fields (ticket 01, 02, 05; flow-rate-full-empty-telemetry ticket 01/02).
     
     Live fields (retained, republished on every read):
-    - level_pct, status (always)
+    - level_pct, status, fill_rate_lpm, drain_rate_lpm (always)
     - alarm_state (if alarm is configured)
     - temperature_c (if DS18B20 is configured)
+    Identity fields republished only when they change:
+    - last_full_date, last_empty_date (auto-detected on a sustained full/empty crossing)
     """
     # Read level from ADS1115
     voltage = adc.read_voltage(tank.channel, _PGA_DEFAULT)
@@ -203,6 +376,30 @@ def read_and_publish(
     tank_state.alarm = updated_alarm_state
     if tank.alarm_direction is not None:
         publisher.publish(_topic(tank.id, "alarm_state"), json.dumps(new_alarm_state))
+    
+    # Compute and publish fill/drain rate -- unconditional live fields (flow-rate-full-empty-telemetry ticket 01)
+    fill_rate_lpm, drain_rate_lpm, updated_flow_state = _compute_flow_rates(
+        tank, level_pct, now, tank_state.flow
+    )
+    tank_state.flow = updated_flow_state
+    publisher.publish(_topic(tank.id, "fill_rate_lpm"), json.dumps(round(fill_rate_lpm, 2)))
+    publisher.publish(_topic(tank.id, "drain_rate_lpm"), json.dumps(round(drain_rate_lpm, 2)))
+    
+    # Compute last_full_date/last_empty_date auto-detection (flow-rate-full-empty-telemetry ticket 02)
+    committed_full, committed_empty, updated_full_empty_state = _compute_full_empty_state(
+        tank, level_pct, now, tank_state.full_empty
+    )
+    tank_state.full_empty = updated_full_empty_state
+    if committed_full is not None:
+        _save_state_field(tank.id, "last_full_date", committed_full)
+        tank_state.last_full_date = committed_full
+        publisher.publish(_topic(tank.id, "last_full_date"), json.dumps(committed_full))
+        logger.info(f"Tank {tank.id}: last_full_date auto-detected as {committed_full}")
+    if committed_empty is not None:
+        _save_state_field(tank.id, "last_empty_date", committed_empty)
+        tank_state.last_empty_date = committed_empty
+        publisher.publish(_topic(tank.id, "last_empty_date"), json.dumps(committed_empty))
+        logger.info(f"Tank {tank.id}: last_empty_date auto-detected as {committed_empty}")
     
     # Read and publish temperature if configured (ticket 05)
     if tank.temp_sensor_id is not None:
@@ -229,37 +426,45 @@ def read_and_publish(
     )
 
 
-def _handle_last_inspected_date_command(
+def _handle_date_set_command(
     publisher: Publisher,
     tank: TankConfig,
     tank_state: TankState,
+    field_name: str,
     payload: str,
 ) -> None:
-    """Handle last_inspected_date/set command topic (ticket 06)."""
+    """Handle last_inspected_date/last_full_date/last_empty_date /set command topics.
+
+    Shared handler for all three date-valued command topics (ticket 06
+    established the pattern for last_inspected_date; flow-rate-full-empty-telemetry
+    ticket 02 reuses it exactly for last_full_date/last_empty_date). Rejects
+    malformed or future dates, logs-only on error, no error topic.
+    """
     try:
         # Payload should be a JSON string: "2026-09-29"
         date_str = json.loads(payload)
     except json.JSONDecodeError:
-        logger.error(f"Tank {tank.id}: Invalid JSON in last_inspected_date/set: {payload}")
+        logger.error(f"Tank {tank.id}: Invalid JSON in {field_name}/set: {payload}")
         return
     
     # Validate format and reject future dates
-    if not _validate_last_inspected_date(date_str):
+    if not _validate_date_str(date_str):
         logger.error(
-            f"Tank {tank.id}: Invalid last_inspected_date: {date_str} "
+            f"Tank {tank.id}: Invalid {field_name}: {date_str} "
             "(must be YYYY-MM-DD and not a future date)"
         )
         return
     
-    # Persist and publish
-    _save_last_inspected_date(tank.id, date_str)
-    tank_state.last_inspected_date = date_str
-    publisher.publish(_topic(tank.id, "last_inspected_date"), json.dumps(date_str))
-    logger.info(f"Tank {tank.id}: last_inspected_date set to {date_str}")
+    # Persist and publish -- manual writes go through unconditionally (last write
+    # wins); auto-detection keeps running independently and may overwrite later.
+    _save_state_field(tank.id, field_name, date_str)
+    setattr(tank_state, field_name, date_str)
+    publisher.publish(_topic(tank.id, field_name), json.dumps(date_str))
+    logger.info(f"Tank {tank.id}: {field_name} set to {date_str}")
 
 
 def run(config: AppConfig) -> None:
-    """Main publish loop (ticket 01, 02, 05, 06)."""
+    """Main publish loop (ticket 01, 02, 05, 06; flow-rate-full-empty-telemetry ticket 01, 02)."""
     _ensure_state_dir()
     
     publisher = Publisher(config.mqtt)
@@ -270,8 +475,11 @@ def run(config: AppConfig) -> None:
     tank_states: dict[str, TankState] = {}
     for tank in config.tanks:
         tank_state = TankState()
-        # Load persisted last_inspected_date (ticket 06)
-        tank_state.last_inspected_date = _load_last_inspected_date(tank.id)
+        # Load persisted identity dates (ticket 06; last_full_date/last_empty_date
+        # added by flow-rate-full-empty-telemetry ticket 02)
+        tank_state.last_inspected_date = _load_state_field(tank.id, "last_inspected_date")
+        tank_state.last_full_date = _load_state_field(tank.id, "last_full_date")
+        tank_state.last_empty_date = _load_state_field(tank.id, "last_empty_date")
         tank_states[tank.id] = tank_state
     
     # Temperature sensor cache (ticket 05)
@@ -281,14 +489,16 @@ def run(config: AppConfig) -> None:
     for tank in config.tanks:
         publish_identity(publisher, tank, tank_states[tank.id])
     
-    # Subscribe to last_inspected_date/set command topics (ticket 06)
+    # Subscribe to last_inspected_date/last_full_date/last_empty_date /set command
+    # topics (ticket 06; last_full_date/last_empty_date added by ticket 02)
     for tank in config.tanks:
-        topic = _topic(tank.id, "last_inspected_date/set")
-        def make_callback(t: TankConfig) -> callable:
-            def callback(payload: str) -> None:
-                _handle_last_inspected_date_command(publisher, t, tank_states[t.id], payload)
-            return callback
-        publisher.subscribe(topic, make_callback(tank))
+        for field_name in ("last_inspected_date", "last_full_date", "last_empty_date"):
+            topic = _topic(tank.id, f"{field_name}/set")
+            def make_callback(t: TankConfig, f: str) -> callable:
+                def callback(payload: str) -> None:
+                    _handle_date_set_command(publisher, t, tank_states[t.id], f, payload)
+                return callback
+            publisher.subscribe(topic, make_callback(tank, field_name))
     
     try:
         while True:

@@ -62,6 +62,12 @@ class TankConfig:
     alarm_delay_s: float  # seconds to wait after threshold crossed (default 0)
     # Temperature sensor (ticket 05)
     temp_sensor_id: str | None  # 1-Wire ROM ID for DS18B20, None if not configured
+    # Flow-rate telemetry (flow-rate-full-empty-telemetry ticket 01)
+    flow_min_delta_pct: float  # noise floor for a qualifying edge (default 0.3)
+    flow_idle_timeout_s: float  # seconds with no edge before rate reports 0 (default 30)
+    # Full/empty date tracking (flow-rate-full-empty-telemetry ticket 02)
+    full_threshold_pct: float  # in-band threshold for last_full_date (default 99)
+    empty_threshold_pct: float  # in-band threshold for last_empty_date (default 1)
 
 
 @dataclass(frozen=True)
@@ -170,6 +176,14 @@ def load_config(default_path: Path = DEFAULT_CONFIG_PATH, local_path: Path | Non
         # Temperature sensor (ticket 05)
         temp_sensor_id = section.get("temp_sensor_id", fallback=None)
         temp_sensor_id = temp_sensor_id.strip() if temp_sensor_id else None
+
+        # Flow-rate telemetry (flow-rate-full-empty-telemetry ticket 01)
+        flow_min_delta_pct = _get_float(section, "flow_min_delta_pct", default=0.3)
+        flow_idle_timeout_s = _get_float(section, "flow_idle_timeout_s", default=30.0)
+
+        # Full/empty date tracking (flow-rate-full-empty-telemetry ticket 02)
+        full_threshold_pct = _get_float(section, "full_threshold_pct", default=99.0)
+        empty_threshold_pct = _get_float(section, "empty_threshold_pct", default=1.0)
         
         tanks.append(
             TankConfig(
@@ -185,6 +199,10 @@ def load_config(default_path: Path = DEFAULT_CONFIG_PATH, local_path: Path | Non
                 alarm_restore=alarm_restore,
                 alarm_delay_s=alarm_delay_s,
                 temp_sensor_id=temp_sensor_id,
+                flow_min_delta_pct=flow_min_delta_pct,
+                flow_idle_timeout_s=flow_idle_timeout_s,
+                full_threshold_pct=full_threshold_pct,
+                empty_threshold_pct=empty_threshold_pct,
             )
         )
 
