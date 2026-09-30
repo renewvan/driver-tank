@@ -108,6 +108,23 @@ def _ensure_state_dir() -> None:
     _STATE_DIR.mkdir(exist_ok=True, parents=True)
 
 
+def _read_state_file(tank_id: str) -> dict:
+    """Load state/<tank_id>.json as a dict, or {} if absent/unreadable
+    (ticket 06). Shared by _load_state_field and _migrate_timestamp_field
+    (code-review finding, volume-timestamp-telemetry: both independently
+    duplicated this existence-check + parse shape) -- one read path, two
+    call sites.
+    """
+    state_file = _STATE_DIR / f"{tank_id}.json"
+    if not state_file.exists():
+        return {}
+    try:
+        return json.loads(state_file.read_text())
+    except Exception as e:
+        logger.warning(f"Failed to load state for tank={tank_id}: {e}")
+        return {}
+
+
 def _load_state_field(tank_id: str, field_name: str) -> str | float | None:
     """Load a single persisted field from state/<tank_id>.json (ticket 06).
 
@@ -116,15 +133,7 @@ def _load_state_field(tank_id: str, field_name: str) -> str | float | None:
     volume-timestamp-telemetry ticket 02) -- all five share one file, one
     read/write helper (flow-rate-full-empty-telemetry ticket 02).
     """
-    state_file = _STATE_DIR / f"{tank_id}.json"
-    if not state_file.exists():
-        return None
-    try:
-        data = json.loads(state_file.read_text())
-        return data.get(field_name)
-    except Exception as e:
-        logger.warning(f"Failed to load state for tank={tank_id}: {e}")
-        return None
+    return _read_state_file(tank_id).get(field_name)
 
 
 def _save_state_field(tank_id: str, field_name: str, value: str | float) -> None:
@@ -192,12 +201,8 @@ def _migrate_timestamp_field(tank_id: str, new_key: str) -> str | None:
     """
     legacy_key = _TIMESTAMP_FIELD_LEGACY_KEYS[new_key]
     state_file = _STATE_DIR / f"{tank_id}.json"
-    if not state_file.exists():
-        return None
-    try:
-        data = json.loads(state_file.read_text())
-    except Exception as e:
-        logger.warning(f"Failed to load state for tank={tank_id}: {e}")
+    data = _read_state_file(tank_id)
+    if not data:
         return None
 
     raw = data.get(new_key)
