@@ -367,6 +367,54 @@ def _compute_flow_rates(
     return flow_state.last_fill_rate, flow_state.last_drain_rate, flow_state
 
 
+def _smoothed_level_pct(
+    tank: TankConfig,
+    level_pct: float,
+    now: float,
+    flow_state: FlowState,
+) -> float:
+    """Extrapolate a smooth display value between a stepped sender's real
+    readings, using the current edge-to-edge fill/drain rate (flow-rate
+    smoothing ticket 01).
+
+    Some senders (e.g. reed-switch resistive floats like the A5-E200) only
+    report a handful of discrete resistance steps across their travel, so
+    raw `level_pct` jumps in big irregular increments instead of sweeping
+    smoothly. `level_pct` itself stays the untouched sender reading --
+    alarms, flow-rate edges, and full/empty latching all key off it and
+    must not see fabricated values. This produces a *separate* display-only
+    value: starting from the last real edge, it projects forward at the
+    last computed rate for the elapsed time since that edge, capped at
+    [0, 100]. The projection's base (`edge_level_pct`/`edge_time`) moves in
+    lockstep with real jumps, so the smoothed value snaps back onto the
+    real reading the instant a new step lands, then resumes extrapolating
+    from there. Once flow goes idle, `_compute_flow_rates` zeroes the rate
+    and this collapses back to the raw reading -- no runaway drift.
+    """
+    if flow_state.edge_level_pct is None or flow_state.edge_time is None:
+        return level_pct
+
+    # Signed rate: safe to subtract because _compute_flow_rates guarantees
+    # only one of last_fill_rate/last_drain_rate is ever nonzero at a time.
+    rate_lpm = flow_state.last_fill_rate - flow_state.last_drain_rate
+    if rate_lpm == 0.0 or tank.capacity_l <= 0:
+        return level_pct
+
+    elapsed_min = (now - flow_state.edge_time) / 60.0
+    if elapsed_min <= 0:
+        return level_pct
+
+    pct_per_min = rate_lpm / tank.capacity_l * 100.0
+    extrapolated = flow_state.edge_level_pct + pct_per_min * elapsed_min
+    extrapolated = max(0.0, min(100.0, extrapolated))
+
+    # Defensive: never extrapolate backward past the sender's own latest
+    # real reading (guards against clock skew / a stale edge).
+    if pct_per_min > 0:
+        return max(level_pct, extrapolated)
+    return min(level_pct, extrapolated)
+
+
 def _compute_one_shot_latch(
     in_band: bool,
     latched: bool,
@@ -486,11 +534,12 @@ def read_and_publish(
     now: float,
 ) -> None:
     """Read sensors and publish live fields (ticket 01, 02, 05; flow-rate-full-empty-telemetry ticket 01/02;
-    volume-timestamp-telemetry ticket 02).
+    volume-timestamp-telemetry ticket 02; flow-rate smoothing ticket 01).
     
     Live fields (retained, republished on every read):
     - level_pct, status, fill_rate_lpm, drain_rate_lpm (always)
     - volume_since_full_l, volume_since_empty_l (always)
+    - level_pct_smoothed (always; rate-extrapolated display value for stepped senders, see _smoothed_level_pct)
     - alarm_state (if alarm is configured)
     - temperature_c (if DS18B20 is configured)
     Identity fields republished only when they change:
@@ -517,6 +566,11 @@ def read_and_publish(
     tank_state.flow = updated_flow_state
     publisher.publish(_topic(tank.id, "fill_rate_lpm"), json.dumps(round(fill_rate_lpm, 2)))
     publisher.publish(_topic(tank.id, "drain_rate_lpm"), json.dumps(round(drain_rate_lpm, 2)))
+
+    # Rate-extrapolated display value for steppy senders (flow-rate smoothing ticket 01).
+    # level_pct above stays the raw sender reading; alarms/edges/latches all key off it.
+    smoothed_pct = _smoothed_level_pct(tank, level_pct, now, updated_flow_state)
+    publisher.publish(_topic(tank.id, "level_pct_smoothed"), json.dumps(round(smoothed_pct, 1)))
     
     # Compute last_full_at/last_empty_at auto-detection (flow-rate-full-empty-telemetry ticket 02)
     committed_full, committed_empty, updated_full_empty_state = _compute_full_empty_state(
