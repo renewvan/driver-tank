@@ -24,11 +24,13 @@ Retained, under `renewvan/tank/<fresh|grey>/`:
 **Identity fields** (published once at startup):
 - `fluid_type` — string (e.g., `fresh_water`, `grey_water`)
 - `capacity_l` — number, liters (canonical unit; configured via `tank_capacity` + `volume_unit`)
+- `alarm_direction` — `low` / `high` (optional, only if alarm is configured per tank)
+- `alarm_threshold_pct` — number 0–100, level that trips `alarm_state` to `alarm` (optional, only if alarm is configured per tank)
+- `alarm_restore_pct` — number 0–100, level that clears `alarm_state` back to `ok` (optional, only if alarm is configured per tank)
 - `last_inspected_at` — string, ISO-8601 timestamp with local UTC offset (optional, only if set via `/set` command topic)
 
 **Live fields** (republished on every sensor read, ~3s default):
-- `level_pct` — number 0–100 (raw sender reading; alarms/flow-rate edges/full-empty latching all key off this, never the smoothed value)
-- `level_pct_smoothed` — number 0–100, rate-extrapolated display value for stepped/reed-switch senders (e.g. A5-E200) that only report a handful of discrete resistance steps across their travel; projects forward from the last real edge at the current fill/drain rate, snaps back onto `level_pct` the instant a new real step lands, and collapses to `level_pct` once flow goes idle. Display-only — never used for alarms or latching.
+- `level_pct` — number 0–100 (raw sender reading; alarms/flow-rate edges/full-empty latching all key off this)
 - `status` — `ok` / `open_circuit` / `short_circuit` (ADS1115 sensor health)
 - `alarm_state` — `ok` / `alarm` (optional, only if alarm is configured per tank)
 - `temperature_c` — number, degrees Celsius (optional, only if DS18B20 is configured per tank)

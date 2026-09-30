@@ -18,7 +18,6 @@ from node_tank.driver import (
     _handle_timestamp_set_command,
     _migrate_timestamp_field,
     _normalize_timestamp_str,
-    _smoothed_level_pct,
 )
 
 
@@ -119,60 +118,6 @@ def test_resumed_flow_after_idle_timeout_measured_from_last_real_edge():
     assert fill == 10.0
     assert drain == 0.0
     assert state.edge_time == 60.0
-
-
-# --- _smoothed_level_pct ---------------------------------------------------
-
-
-def test_smoothed_matches_raw_before_any_edge():
-    tank = make_tank()
-    state = FlowState()
-    assert _smoothed_level_pct(tank, 50.0, now=1000.0, flow_state=state) == 50.0
-
-
-def test_smoothed_matches_raw_when_rate_is_zero():
-    tank = make_tank()
-    state = FlowState(edge_level_pct=50.0, edge_time=1000.0, last_fill_rate=0.0, last_drain_rate=0.0)
-    assert _smoothed_level_pct(tank, 50.0, now=1030.0, flow_state=state) == 50.0
-
-
-def test_smoothed_extrapolates_forward_during_fill():
-    tank = make_tank(capacity_l=100.0)
-    # 10 L/min on a 100L tank -> 10%/min. Sender is stuck at its last real
-    # step (48%) while the float physically keeps rising toward the next one.
-    state = FlowState(edge_level_pct=48.0, edge_time=0.0, last_fill_rate=10.0, last_drain_rate=0.0)
-    smoothed = _smoothed_level_pct(tank, level_pct=48.0, now=30.0, flow_state=state)
-    # 30s at 10%/min -> +5% -> 53%
-    assert abs(smoothed - 53.0) < 1e-9
-
-
-def test_smoothed_extrapolates_downward_during_drain():
-    tank = make_tank(capacity_l=100.0)
-    state = FlowState(edge_level_pct=69.0, edge_time=0.0, last_fill_rate=0.0, last_drain_rate=20.0)
-    smoothed = _smoothed_level_pct(tank, level_pct=69.0, now=15.0, flow_state=state)
-    # 15s at 20%/min -> -5% -> 64%
-    assert abs(smoothed - 64.0) < 1e-9
-
-
-def test_smoothed_snaps_to_new_real_step_immediately_after_an_edge():
-    tank = make_tank(capacity_l=100.0)
-    # Right after a real jump, edge_time == now: no elapsed time to extrapolate.
-    state = FlowState(edge_level_pct=69.0, edge_time=1000.0, last_fill_rate=10.0, last_drain_rate=0.0)
-    assert _smoothed_level_pct(tank, level_pct=69.0, now=1000.0, flow_state=state) == 69.0
-
-
-def test_smoothed_clamps_at_one_hundred_percent():
-    tank = make_tank(capacity_l=100.0)
-    state = FlowState(edge_level_pct=95.0, edge_time=0.0, last_fill_rate=100.0, last_drain_rate=0.0)
-    smoothed = _smoothed_level_pct(tank, level_pct=95.0, now=600.0, flow_state=state)
-    assert smoothed == 100.0
-
-
-def test_smoothed_clamps_at_zero_percent():
-    tank = make_tank(capacity_l=100.0)
-    state = FlowState(edge_level_pct=5.0, edge_time=0.0, last_fill_rate=0.0, last_drain_rate=100.0)
-    smoothed = _smoothed_level_pct(tank, level_pct=5.0, now=600.0, flow_state=state)
-    assert smoothed == 0.0
 
 
 # --- _compute_full_empty_state --------------------------------------------
