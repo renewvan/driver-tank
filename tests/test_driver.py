@@ -1,9 +1,10 @@
 """Fixture-sequence tests for the flow-rate and full/empty pure state
-machines, and for date-command validation -- no MQTT broker or ADC.
+machines, and for timestamp-command validation -- no MQTT broker or ADC.
 
 Prior art: tests/test_calibration.py (fixture input, pure function, no I/O).
 """
 import json
+from datetime import datetime, timedelta
 
 from node_tank.calibration import Calibration
 from node_tank.config import TankConfig
@@ -13,8 +14,9 @@ from node_tank.driver import (
     TankState,
     _compute_flow_rates,
     _compute_full_empty_state,
-    _handle_date_set_command,
-    _validate_date_str,
+    _handle_timestamp_set_command,
+    _migrate_timestamp_field,
+    _normalize_timestamp_str,
 )
 
 
@@ -120,6 +122,16 @@ def test_resumed_flow_after_idle_timeout_measured_from_last_real_edge():
 # --- _compute_full_empty_state --------------------------------------------
 
 
+def _assert_is_recent_local_timestamp(value: str) -> None:
+    """The committed value is a full ISO-8601 timestamp with a local UTC
+    offset, close to real wall-clock "now" (volume-timestamp-telemetry
+    ticket 01 -- committed via datetime.now().astimezone(), not derived
+    from the synthetic `now` float the tests pass in)."""
+    parsed = datetime.fromisoformat(value)
+    assert parsed.tzinfo is not None
+    assert abs(parsed - datetime.now().astimezone()) < timedelta(seconds=5)
+
+
 def test_sustained_crossing_into_full_band_commits_once():
     tank = make_tank(full_threshold_pct=99.0, alarm_delay_s=5.0)
     state = FullEmptyState()
@@ -130,7 +142,7 @@ def test_sustained_crossing_into_full_band_commits_once():
     assert state.full_latched is False
     # Delay elapses while still in band: commits.
     full, empty, state = _compute_full_empty_state(tank, 99.5, now=5.0, full_empty_state=state)
-    assert full == __import__("datetime").date.today().isoformat()
+    _assert_is_recent_local_timestamp(full)
     assert state.full_latched is True
 
 
@@ -193,21 +205,31 @@ def test_full_and_empty_latches_are_independent():
     assert state.empty_latched is False
 
 
-# --- date validation / command handling -----------------------------------
+# --- timestamp validation / command handling -------------------------------
 
 
-def test_validate_date_str_accepts_well_formed_past_date():
-    assert _validate_date_str("2020-01-01") is True
+def test_normalize_timestamp_str_accepts_full_timestamp():
+    value = "2020-01-01T10:00:00-05:00"
+    assert _normalize_timestamp_str(value) == value
 
 
-def test_validate_date_str_rejects_malformed_string():
-    assert _validate_date_str("not-a-date") is False
-    assert _validate_date_str("2020/01/01") is False
+def test_normalize_timestamp_str_accepts_bare_date_and_normalizes_to_local_midnight():
+    normalized = _normalize_timestamp_str("2020-01-01")
+    parsed = datetime.fromisoformat(normalized)
+    assert parsed.tzinfo is not None
+    assert (parsed.year, parsed.month, parsed.day) == (2020, 1, 1)
+    assert (parsed.hour, parsed.minute, parsed.second) == (0, 0, 0)
 
 
-def test_validate_date_str_rejects_future_date():
-    future_year = __import__("datetime").date.today().year + 5
-    assert _validate_date_str(f"{future_year}-01-01") is False
+def test_normalize_timestamp_str_rejects_malformed_string():
+    assert _normalize_timestamp_str("not-a-date") is None
+    assert _normalize_timestamp_str("2020/01/01") is None
+
+
+def test_normalize_timestamp_str_rejects_future_value():
+    future_year = datetime.now().year + 5
+    assert _normalize_timestamp_str(f"{future_year}-01-01") is None
+    assert _normalize_timestamp_str(f"{future_year}-01-01T00:00:00+00:00") is None
 
 
 class _FakePublisher:
@@ -218,42 +240,96 @@ class _FakePublisher:
         self.published.append((topic, payload))
 
 
-def test_handle_date_set_command_rejects_malformed_date(monkeypatch, tmp_path):
+def test_handle_timestamp_set_command_rejects_malformed_value(monkeypatch, tmp_path):
     import node_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     tank = make_tank()
     tank_state = TankState()
     publisher = _FakePublisher()
-    _handle_date_set_command(publisher, tank, tank_state, "last_full_date", json.dumps("not-a-date"))
+    _handle_timestamp_set_command(publisher, tank, tank_state, "last_full_at", json.dumps("not-a-date"))
     assert publisher.published == []
-    assert tank_state.last_full_date is None
+    assert tank_state.last_full_at is None
 
 
-def test_handle_date_set_command_rejects_future_date(monkeypatch, tmp_path):
+def test_handle_timestamp_set_command_rejects_future_value(monkeypatch, tmp_path):
     import node_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
-    future_year = __import__("datetime").date.today().year + 5
+    future_year = datetime.now().year + 5
     tank = make_tank()
     tank_state = TankState()
     publisher = _FakePublisher()
-    _handle_date_set_command(
-        publisher, tank, tank_state, "last_empty_date", json.dumps(f"{future_year}-01-01")
+    _handle_timestamp_set_command(
+        publisher, tank, tank_state, "last_empty_at", json.dumps(f"{future_year}-01-01")
     )
     assert publisher.published == []
-    assert tank_state.last_empty_date is None
+    assert tank_state.last_empty_at is None
 
 
-def test_handle_date_set_command_accepts_and_persists_valid_date(monkeypatch, tmp_path):
+def test_handle_timestamp_set_command_accepts_bare_date_and_persists_normalized(monkeypatch, tmp_path):
     import node_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     tank = make_tank()
     tank_state = TankState()
     publisher = _FakePublisher()
-    _handle_date_set_command(publisher, tank, tank_state, "last_full_date", json.dumps("2020-06-15"))
-    assert tank_state.last_full_date == "2020-06-15"
-    assert publisher.published == [("renewvan/tank/fresh/last_full_date", json.dumps("2020-06-15"))]
+    _handle_timestamp_set_command(publisher, tank, tank_state, "last_full_at", json.dumps("2020-06-15"))
+    parsed = datetime.fromisoformat(tank_state.last_full_at)
+    assert (parsed.year, parsed.month, parsed.day) == (2020, 6, 15)
+    assert parsed.tzinfo is not None
+    assert publisher.published == [("renewvan/tank/fresh/last_full_at", json.dumps(tank_state.last_full_at))]
     # Single round-trip persistence check (not exhaustive file-format testing).
-    assert driver_mod._load_state_field("fresh", "last_full_date") == "2020-06-15"
+    assert driver_mod._load_state_field("fresh", "last_full_at") == tank_state.last_full_at
+
+
+def test_handle_timestamp_set_command_accepts_full_timestamp(monkeypatch, tmp_path):
+    import node_tank.driver as driver_mod
+
+    monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
+    tank = make_tank()
+    tank_state = TankState()
+    publisher = _FakePublisher()
+    value = "2020-06-15T08:30:00-04:00"
+    _handle_timestamp_set_command(publisher, tank, tank_state, "last_empty_at", json.dumps(value))
+    assert tank_state.last_empty_at == value
+    assert publisher.published == [("renewvan/tank/fresh/last_empty_at", json.dumps(value))]
+
+
+# --- state-file upgrade path (_migrate_timestamp_field) -------------------
+
+
+def test_migrate_timestamp_field_upgrades_legacy_bare_date_in_place(monkeypatch, tmp_path):
+    import node_tank.driver as driver_mod
+
+    monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
+    state_file = tmp_path / "fresh.json"
+    state_file.write_text(json.dumps({"last_full_date": "2020-06-15"}))
+
+    result = _migrate_timestamp_field("fresh", "last_full_at")
+
+    parsed = datetime.fromisoformat(result)
+    assert (parsed.year, parsed.month, parsed.day) == (2020, 6, 15)
+    assert parsed.tzinfo is not None
+
+    on_disk = json.loads(state_file.read_text())
+    assert on_disk["last_full_at"] == result
+    assert "last_full_date" not in on_disk
+
+
+def test_migrate_timestamp_field_reads_new_key_directly_when_already_upgraded(monkeypatch, tmp_path):
+    import node_tank.driver as driver_mod
+
+    monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
+    state_file = tmp_path / "fresh.json"
+    value = "2021-03-01T09:00:00-05:00"
+    state_file.write_text(json.dumps({"last_full_at": value}))
+
+    assert _migrate_timestamp_field("fresh", "last_full_at") == value
+
+
+def test_migrate_timestamp_field_returns_none_when_no_state_file(tmp_path, monkeypatch):
+    import node_tank.driver as driver_mod
+
+    monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
+    assert _migrate_timestamp_field("fresh", "last_full_at") is None

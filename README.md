@@ -24,7 +24,7 @@ Retained, under `renewvan/tank/<fresh|grey>/`:
 **Identity fields** (published once at startup):
 - `fluid_type` — string (e.g., `fresh_water`, `grey_water`)
 - `capacity_l` — number, liters (canonical unit; configured via `tank_capacity` + `volume_unit`)
-- `last_inspected_date` — string, YYYY-MM-DD format (optional, only if set via `/set` command topic)
+- `last_inspected_at` — string, ISO-8601 timestamp with local UTC offset (optional, only if set via `/set` command topic)
 
 **Live fields** (republished on every sensor read, ~3s default):
 - `level_pct` — number 0–100
@@ -33,7 +33,7 @@ Retained, under `renewvan/tank/<fresh|grey>/`:
 - `temperature_c` — number, degrees Celsius (optional, only if DS18B20 is configured per tank)
 
 **Command topics** (unretained, for external control):
-- `renewvan/tank/<id>/last_inspected_date/set` — payload: JSON string, YYYY-MM-DD format (e.g., `"2026-09-29"`); node validates and republishes to state topic on success
+- `renewvan/tank/<id>/last_inspected_at/set` — payload: JSON string, ISO-8601 timestamp (e.g., `"2026-09-29T14:32:05-04:00"`) or bare `YYYY-MM-DD` (e.g., `"2026-09-29"`, normalized to local midnight); node validates and republishes to state topic on success
 
 **Node liveness** (not tank-keyed):
 - `renewvan/tank/health` — `online`/`offline` via MQTT LWT — deliberately 3 segments, not 4, so it can't be mistaken for a `tank` entity keyed by a fake `health`/`node` id
