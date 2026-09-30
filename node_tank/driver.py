@@ -121,12 +121,12 @@ def publish_identity(publisher: Publisher, tank: TankConfig, tank_state: TankSta
 def _crossed(direction: str, level_pct: float, boundary: float, entering_alarm: bool) -> bool:
     """True if level_pct has crossed past boundary for this transition.
 
-    Entering alarm moves *toward* the configured direction (low: <=,
-    high: >=); restoring to ok moves back the *opposite* way (low: >=,
-    high: <=) -- entry and restore boundaries are approached from
+    Entering alarm moves *toward* the configured direction (empty: <=,
+    full: >=); restoring to ok moves back the *opposite* way (empty: >=,
+    full: <=) -- entry and restore boundaries are approached from
     opposite sides, so the comparison flips between them.
     """
-    if direction == "low":
+    if direction == "empty":
         return level_pct <= boundary if entering_alarm else level_pct >= boundary
     return level_pct >= boundary if entering_alarm else level_pct <= boundary
 

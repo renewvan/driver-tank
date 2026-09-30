@@ -56,7 +56,7 @@ class TankConfig:
     update_interval_ms: int
     calibration: Calibration
     # Alarm configuration (ticket 02)
-    alarm_direction: str | None  # "low" or "high", None if alarm disabled
+    alarm_direction: str | None  # "empty" or "full", None if alarm disabled
     alarm_threshold: float | None  # level % that triggers alarm
     alarm_restore: float | None  # level % that clears alarm
     alarm_delay_s: float  # seconds to wait after threshold crossed (default 0)
