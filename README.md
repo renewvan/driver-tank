@@ -123,6 +123,29 @@ More error-prone; externally powered is preferred.
 
 Omit `temp_sensor_id` to disable temperature sensing for a tank.
 
+## Development
+
+```bash
+git clone git@github.com:renewvan/node-tank.git
+cd node-tank
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-test.txt
+```
+
+Calibration, config, and driver-state-machine logic (flow rate, alarm
+hysteresis, full/empty latching) are pure functions tested against fixture
+values — no MQTT broker, ADS1115, or Raspberry Pi required for any of it;
+see **Testing** below. `python -m node_tank.main` itself does need real
+I2C hardware (the ADS1115), so it isn't runnable off-Pi; iterate against
+the unit tests instead, and verify hardware-dependent changes on-device
+per **Running**.
+
+Before opening a PR: `pytest tests/ -v` must pass (same command CI runs),
+and any change to a published field or its semantics needs a matching
+`hub/schema/tank.schema.json` update in a `hub` PR — the two repos'
+contracts must land together (per `hub/docs/adr/0001-compose-services-via-pinned-images-not-git-submodules.md`,
+they're never coupled at build time, only at the schema-version level).
+
 ## Configuration
 
 `config.default.ini` ships every key with a default. Copy
