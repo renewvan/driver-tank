@@ -65,9 +65,10 @@ class TankConfig:
     # Flow-rate telemetry (flow-rate-full-empty-telemetry ticket 01)
     flow_min_delta_pct: float  # noise floor for a qualifying edge (default 0.3)
     flow_idle_timeout_s: float  # seconds with no edge before rate reports 0 (default 30)
-    # Full/empty date tracking (flow-rate-full-empty-telemetry ticket 02)
-    full_threshold_pct: float  # in-band threshold for last_full_date (default 99)
-    empty_threshold_pct: float  # in-band threshold for last_empty_date (default 1)
+    # Full/empty timestamp tracking (flow-rate-full-empty-telemetry ticket 02;
+    # renamed from *_date to *_at, volume-timestamp-telemetry ticket 01)
+    full_threshold_pct: float  # in-band threshold for last_full_at (default 99)
+    empty_threshold_pct: float  # in-band threshold for last_empty_at (default 1)
 
 
 @dataclass(frozen=True)

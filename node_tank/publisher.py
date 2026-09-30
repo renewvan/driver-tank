@@ -5,7 +5,7 @@ LWT on a status topic so downstream consumers can detect a dead node,
 and a long-lived connection (this node is the source of truth, not a
 re-publisher).
 
-Ticket 06: Added subscription support for command topics (last_inspected_date/set).
+Ticket 06: Added subscription support for command topics (last_inspected_at/set).
 """
 from __future__ import annotations
 
