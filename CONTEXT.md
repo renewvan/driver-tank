@@ -5,14 +5,6 @@ published field *means*, independent of the Python that computes it.
 
 ## Language
 
-**Fill rate / Drain rate**:
-The instantaneous speed (liters/minute) at which a tank's level is
-currently rising or falling, computed edge-to-edge from consecutive
-qualifying level readings. Resets to `0` once flow stops (idle
-timeout). A speedometer, not an odometer — it never expresses a total.
-_Avoid_: Flow rate (ambiguous — doesn't say instantaneous vs. total),
-consumption rate.
-
 **Latch commit**:
 The one-shot event where a tank's level has sustained inside the
 full-band or empty-band (past `full_threshold_pct`/`empty_threshold_pct`,

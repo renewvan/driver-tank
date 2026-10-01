@@ -64,15 +64,6 @@ class AlarmState:
 
 
 @dataclass
-class FlowState:
-    """Per-tank fill/drain flow-rate tracking (flow-rate-full-empty-telemetry ticket 01)."""
-    edge_level_pct: float | None = None  # level_pct at the last qualifying edge, None until first read
-    edge_time: float | None = None  # timestamp of the last qualifying edge
-    last_fill_rate: float = 0.0  # last-published fill_rate_lpm
-    last_drain_rate: float = 0.0  # last-published drain_rate_lpm
-
-
-@dataclass
 class FullEmptyState:
     """Per-tank last-full/last-empty one-shot latch tracking (flow-rate-full-empty-telemetry ticket 02)."""
     full_latched: bool = False
@@ -86,13 +77,12 @@ class TankState:
     """Per-tank runtime state."""
     alarm: AlarmState = field(default_factory=AlarmState)
     last_inspected_at: str | None = None  # Most recent persisted timestamp (ISO-8601, local offset)
-    flow: FlowState = field(default_factory=FlowState)
     full_empty: FullEmptyState = field(default_factory=FullEmptyState)
     last_full_at: str | None = None  # Most recent persisted timestamp (ISO-8601, local offset)
     last_empty_at: str | None = None  # Most recent persisted timestamp (ISO-8601, local offset)
     # Volume-since-latch anchors (volume-timestamp-telemetry ticket 02): level_pct
     # at the moment last_full_at/last_empty_at last committed. Persisted (unlike
-    # FlowState/FullEmptyState) so volume_since_full_l/volume_since_empty_l survive
+    # FullEmptyState) so volume_since_full_l/volume_since_empty_l survive
     # a restart -- None means "no commit yet" (or a pre-upgrade state file with no
     # anchor), and the derived field publishes 0 until the next commit.
     level_pct_at_full_commit: float | None = None
@@ -324,56 +314,6 @@ def _compute_alarm_state(
     return target_state, AlarmState(previous_state=target_state)
 
 
-def _compute_flow_rates(
-    tank: TankConfig,
-    level_pct: float,
-    now: float,
-    flow_state: FlowState,
-) -> tuple[float, float, FlowState]:
-    """Compute fill_rate_lpm/drain_rate_lpm from edge-to-edge level_pct changes
-    (flow-rate-full-empty-telemetry ticket 01).
-
-    Tracks the last level_pct reading that differed from the stored "edge"
-    sample by at least flow_min_delta_pct. A qualifying delta moves the edge
-    and computes a fresh rate; sub-threshold deltas are noise and are
-    ignored (edge and published rate both hold). If flow_idle_timeout_s
-    elapses with no qualifying edge, both rates drop to 0 -- but the edge
-    itself is NOT moved, so a later resumed fill/drain is still measured
-    from the last real level change, not from the idle-timeout instant.
-
-    Returns:
-        (fill_rate_lpm, drain_rate_lpm, updated_FlowState)
-    """
-    if flow_state.edge_level_pct is None:
-        # First read of the process: no edge yet, nothing to compare against.
-        return 0.0, 0.0, FlowState(edge_level_pct=level_pct, edge_time=now)
-
-    delta = level_pct - flow_state.edge_level_pct
-
-    if abs(delta) >= tank.flow_min_delta_pct:
-        elapsed_s = now - flow_state.edge_time
-        elapsed_min = elapsed_s / 60.0 if elapsed_s > 0 else 0.0
-        rate = (abs(delta) / 100.0 * tank.capacity_l / elapsed_min) if elapsed_min > 0 else 0.0
-        if delta > 0:
-            fill_rate, drain_rate = rate, 0.0
-        else:
-            fill_rate, drain_rate = 0.0, rate
-        return fill_rate, drain_rate, FlowState(
-            edge_level_pct=level_pct, edge_time=now,
-            last_fill_rate=fill_rate, last_drain_rate=drain_rate,
-        )
-
-    if (now - flow_state.edge_time) >= tank.flow_idle_timeout_s:
-        # No qualifying edge for a while: flow has stopped. Edge stays put.
-        return 0.0, 0.0, FlowState(
-            edge_level_pct=flow_state.edge_level_pct, edge_time=flow_state.edge_time,
-            last_fill_rate=0.0, last_drain_rate=0.0,
-        )
-
-    # In band, no timeout yet: hold the last-published rate.
-    return flow_state.last_fill_rate, flow_state.last_drain_rate, flow_state
-
-
 def _compute_one_shot_latch(
     in_band: bool,
     latched: bool,
@@ -458,8 +398,8 @@ def _compute_volume_since_latch(
     since each direction's own last full/empty latch commit
     (volume-timestamp-telemetry ticket 02).
 
-    Distinct from fill_rate_lpm/drain_rate_lpm (an instantaneous speed):
-    this is a running total against a fixed anchor -- the level_pct at
+    Distinct from an edge-to-edge instantaneous rate: this is a running
+    total against a fixed anchor -- the level_pct at
     the moment the tank was last genuinely full/empty, captured by the
     caller (read_and_publish) the instant _compute_full_empty_state
     reports a commit -- not an edge-to-edge rate. No internal state of
@@ -492,11 +432,11 @@ def read_and_publish(
     temperature_sensors: dict[str, DS18B20],
     now: float,
 ) -> None:
-    """Read sensors and publish live fields (ticket 01, 02, 05; flow-rate-full-empty-telemetry ticket 01/02;
+    """Read sensors and publish live fields (ticket 01, 02, 05;
     volume-timestamp-telemetry ticket 02).
     
     Live fields (retained, republished on every read):
-    - level_pct, status, fill_rate_lpm, drain_rate_lpm (always)
+    - level_pct, status (always)
     - volume_since_full_l, volume_since_empty_l (always)
     - alarm_state (if alarm is configured)
     - temperature_c (if DS18B20 is configured)
@@ -517,14 +457,6 @@ def read_and_publish(
     if tank.alarm_direction is not None:
         publisher.publish(_topic(tank.id, "alarm_state"), json.dumps(new_alarm_state))
     
-    # Compute and publish fill/drain rate -- unconditional live fields (flow-rate-full-empty-telemetry ticket 01)
-    fill_rate_lpm, drain_rate_lpm, updated_flow_state = _compute_flow_rates(
-        tank, level_pct, now, tank_state.flow
-    )
-    tank_state.flow = updated_flow_state
-    publisher.publish(_topic(tank.id, "fill_rate_lpm"), json.dumps(round(fill_rate_lpm, 2)))
-    publisher.publish(_topic(tank.id, "drain_rate_lpm"), json.dumps(round(drain_rate_lpm, 2)))
-
     # Compute last_full_at/last_empty_at auto-detection (flow-rate-full-empty-telemetry ticket 02)
     committed_full, committed_empty, updated_full_empty_state = _compute_full_empty_state(
         tank, level_pct, now, tank_state.full_empty

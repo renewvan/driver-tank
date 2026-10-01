@@ -1,6 +1,6 @@
 [project]
 name = "node-tank"
-version = "0.6.0"
+version = "0.7.0"
 description = "Native MQTT driver for ADS1115-based resistive tank senders"
 requires-python = ">=3.11"
 dependencies = [

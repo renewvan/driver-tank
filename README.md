@@ -30,7 +30,7 @@ Retained, under `renewvan/tank/<fresh|grey>/`:
 - `last_inspected_at` — string, ISO-8601 timestamp with local UTC offset (optional, only if set via `/set` command topic)
 
 **Live fields** (republished on every sensor read, ~3s default):
-- `level_pct` — number 0–100 (raw sender reading; alarms/flow-rate edges/full-empty latching all key off this)
+- `level_pct` — number 0–100 (raw sender reading; alarms/full-empty latching key off this)
 - `status` — `ok` / `open_circuit` / `short_circuit` (ADS1115 sensor health)
 - `alarm_state` — `ok` / `alarm` (optional, only if alarm is configured per tank)
 - `temperature_c` — number, degrees Celsius (optional, only if DS18B20 is configured per tank)

@@ -1,5 +1,5 @@
-"""Fixture-sequence tests for the flow-rate and full/empty pure state
-machines, and for timestamp-command validation -- no MQTT broker or ADC.
+"""Fixture-sequence tests for the full/empty pure state
+machine, and for timestamp-command validation -- no MQTT broker or ADC.
 
 Prior art: tests/test_calibration.py (fixture input, pure function, no I/O).
 """
@@ -9,10 +9,8 @@ from datetime import datetime, timedelta
 from node_tank.calibration import Calibration
 from node_tank.config import TankConfig
 from node_tank.driver import (
-    FlowState,
     FullEmptyState,
     TankState,
-    _compute_flow_rates,
     _compute_full_empty_state,
     _compute_volume_since_latch,
     _handle_timestamp_set_command,
@@ -24,8 +22,6 @@ from node_tank.driver import (
 def make_tank(
     *,
     capacity_l: float = 100.0,
-    flow_min_delta_pct: float = 0.3,
-    flow_idle_timeout_s: float = 30.0,
     full_threshold_pct: float = 99.0,
     empty_threshold_pct: float = 1.0,
     alarm_delay_s: float = 0.0,
@@ -43,81 +39,10 @@ def make_tank(
         alarm_restore=None,
         alarm_delay_s=alarm_delay_s,
         temp_sensor_id=None,
-        flow_min_delta_pct=flow_min_delta_pct,
-        flow_idle_timeout_s=flow_idle_timeout_s,
         full_threshold_pct=full_threshold_pct,
         empty_threshold_pct=empty_threshold_pct,
     )
 
-
-# --- _compute_flow_rates --------------------------------------------------
-
-
-def test_first_read_publishes_zero_before_any_edge():
-    tank = make_tank()
-    fill, drain, state = _compute_flow_rates(tank, 50.0, now=1000.0, flow_state=FlowState())
-    assert (fill, drain) == (0.0, 0.0)
-    assert state.edge_level_pct == 50.0
-    assert state.edge_time == 1000.0
-
-
-def test_still_level_publishes_zero_zero():
-    tank = make_tank()
-    state = FlowState(edge_level_pct=50.0, edge_time=1000.0)
-    fill, drain, state = _compute_flow_rates(tank, 50.0, now=1010.0, flow_state=state)
-    assert (fill, drain) == (0.0, 0.0)
-
-
-def test_qualifying_rise_publishes_fill_rate_and_zeroes_drain():
-    tank = make_tank(capacity_l=100.0, flow_min_delta_pct=0.3)
-    state = FlowState(edge_level_pct=50.0, edge_time=0.0)
-    # +10% over 60s -> 10/100*100L / 1min = 10 L/min
-    fill, drain, state = _compute_flow_rates(tank, 60.0, now=60.0, flow_state=state)
-    assert fill == 10.0
-    assert drain == 0.0
-    assert state.edge_level_pct == 60.0
-    assert state.edge_time == 60.0
-    assert state.last_fill_rate == 10.0
-
-
-def test_qualifying_fall_publishes_drain_rate_and_zeroes_fill():
-    tank = make_tank(capacity_l=100.0, flow_min_delta_pct=0.3)
-    state = FlowState(edge_level_pct=60.0, edge_time=0.0)
-    fill, drain, state = _compute_flow_rates(tank, 50.0, now=60.0, flow_state=state)
-    assert fill == 0.0
-    assert drain == 10.0
-    assert state.last_drain_rate == 10.0
-
-
-def test_subthreshold_delta_does_not_move_edge_or_change_rate():
-    tank = make_tank(flow_min_delta_pct=0.5)
-    state = FlowState(edge_level_pct=50.0, edge_time=0.0, last_fill_rate=3.0, last_drain_rate=0.0)
-    fill, drain, new_state = _compute_flow_rates(tank, 50.2, now=5.0, flow_state=state)
-    assert (fill, drain) == (3.0, 0.0)
-    assert new_state.edge_level_pct == 50.0
-    assert new_state.edge_time == 0.0
-
-
-def test_idle_timeout_zeroes_rates_without_moving_edge():
-    tank = make_tank(flow_idle_timeout_s=30.0, flow_min_delta_pct=0.5)
-    state = FlowState(edge_level_pct=50.0, edge_time=0.0, last_fill_rate=5.0, last_drain_rate=0.0)
-    fill, drain, new_state = _compute_flow_rates(tank, 50.1, now=31.0, flow_state=state)
-    assert (fill, drain) == (0.0, 0.0)
-    assert new_state.edge_level_pct == 50.0
-    assert new_state.edge_time == 0.0
-
-
-def test_resumed_flow_after_idle_timeout_measured_from_last_real_edge():
-    tank = make_tank(capacity_l=100.0, flow_min_delta_pct=0.3, flow_idle_timeout_s=30.0)
-    state = FlowState(edge_level_pct=50.0, edge_time=0.0)
-    # Idle timeout fires at t=31, edge stays at (50.0, 0.0).
-    _, _, state = _compute_flow_rates(tank, 50.1, now=31.0, flow_state=state)
-    # Flow resumes: level rises to 60% at t=60 -> measured against the edge at t=0,
-    # not against the idle-timeout instant.
-    fill, drain, state = _compute_flow_rates(tank, 60.0, now=60.0, flow_state=state)
-    assert fill == 10.0
-    assert drain == 0.0
-    assert state.edge_time == 60.0
 
 
 # --- _compute_full_empty_state --------------------------------------------
