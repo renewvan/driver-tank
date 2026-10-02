@@ -5,6 +5,7 @@ default file ships every key with a safe value and is never edited in
 place; config.ini is gitignored, holds only the keys a given install
 needs to override, and survives upgrades.
 """
+
 from __future__ import annotations
 
 import configparser
@@ -21,17 +22,17 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.default.i
 # Volume unit conversion factors (ticket 03)
 # Convert from the configured unit to liters (canonical unit for publishing)
 _VOLUME_TO_LITERS = {
-    'liters': 1.0,
-    'l': 1.0,
-    'litres': 1.0,
-    'cubic_meters': 1000.0,
-    'm3': 1000.0,
-    'm³': 1000.0,
-    'gallons_us': 3.78541,
-    'us_gallons': 3.78541,
-    'gallons_imp': 4.54609,
-    'gallons_imperial': 4.54609,
-    'imp_gallons': 4.54609,
+    "liters": 1.0,
+    "l": 1.0,
+    "litres": 1.0,
+    "cubic_meters": 1000.0,
+    "m3": 1000.0,
+    "m³": 1000.0,
+    "gallons_us": 3.78541,
+    "us_gallons": 3.78541,
+    "gallons_imp": 4.54609,
+    "gallons_imperial": 4.54609,
+    "imp_gallons": 4.54609,
 }
 
 
@@ -82,7 +83,7 @@ def _get_float(section: configparser.SectionProxy, key: str, default: float | No
 
 def _convert_tank_capacity_to_liters(section: configparser.SectionProxy) -> float:
     """Convert tank_capacity + volume_unit to liters (ticket 03).
-    
+
     Raises:
         ValueError: If both capacity_l (deprecated) and tank_capacity are present,
                    or if tank_capacity is present but volume_unit is missing.
@@ -90,7 +91,7 @@ def _convert_tank_capacity_to_liters(section: configparser.SectionProxy) -> floa
     has_capacity_l = "capacity_l" in section
     has_tank_capacity = "tank_capacity" in section
     has_volume_unit = "volume_unit" in section
-    
+
     # Error if deprecated capacity_l key is present
     if has_capacity_l:
         raise ValueError(
@@ -98,32 +99,34 @@ def _convert_tank_capacity_to_liters(section: configparser.SectionProxy) -> floa
             "Replace with 'tank_capacity' + 'volume_unit' pair. "
             "Example: tank_capacity=70, volume_unit=liters"
         )
-    
+
     # Both tank_capacity and volume_unit must be present together
     if has_tank_capacity != has_volume_unit:
         raise ValueError(
             f"Section {section.name}: 'tank_capacity' and 'volume_unit' must both be present. "
             "Example: tank_capacity=70, volume_unit=liters"
         )
-    
+
     if not has_tank_capacity:
         raise ValueError(f"Section {section.name}: 'tank_capacity' key is required")
-    
+
     # Read and convert
     raw_capacity = section.getfloat("tank_capacity")
     volume_unit = section.get("volume_unit").strip().lower()
-    
+
     factor = _VOLUME_TO_LITERS.get(volume_unit)
     if factor is None:
         logger.warning(
             f"Tank '{section.name}': unknown volume_unit '{volume_unit}', assuming cubic_meters"
         )
         factor = 1000.0  # cubic_meters fallback
-    
+
     return raw_capacity * factor
 
 
-def load_config(default_path: Path = DEFAULT_CONFIG_PATH, local_path: Path | None = None) -> AppConfig:
+def load_config(
+    default_path: Path = DEFAULT_CONFIG_PATH, local_path: Path | None = None
+) -> AppConfig:
     """Load config.default.ini, then layer config.ini (if present) on top."""
     parser = configparser.ConfigParser()
     read_files = [str(default_path)]
@@ -155,22 +158,24 @@ def load_config(default_path: Path = DEFAULT_CONFIG_PATH, local_path: Path | Non
         tank_id = section_name.split(".", 1)[1]
         calibration = Calibration(
             fixed_resistor=_get_float(section, "fixed_resistor"),
-            reference_voltage=_get_float(section, "reference_voltage", i2c.getfloat("reference_voltage", 3.3)),
+            reference_voltage=_get_float(
+                section, "reference_voltage", i2c.getfloat("reference_voltage", 3.3)
+            ),
             sensor_min=_get_float(section, "sensor_min"),
             sensor_max=_get_float(section, "sensor_max"),
             shape=parse_shape(section.get("shape", fallback="")),
         )
-        
+
         # Volume-unit conversion (ticket 03)
         capacity_l = _convert_tank_capacity_to_liters(section)
-        
+
         # Alarm configuration (ticket 02)
         alarm_direction = section.get("alarm_direction", fallback=None)
         alarm_direction = alarm_direction.strip().lower() if alarm_direction else None
         alarm_threshold = _get_float(section, "alarm_threshold", default=None)
         alarm_restore = _get_float(section, "alarm_restore", default=None)
         alarm_delay_s = _get_float(section, "alarm_delay_s", default=0.0)
-        
+
         # Temperature sensor (ticket 05)
         temp_sensor_id = section.get("temp_sensor_id", fallback=None)
         temp_sensor_id = temp_sensor_id.strip() if temp_sensor_id else None
@@ -178,7 +183,7 @@ def load_config(default_path: Path = DEFAULT_CONFIG_PATH, local_path: Path | Non
         # Full/empty date tracking (flow-rate-full-empty-telemetry ticket 02)
         full_threshold_pct = _get_float(section, "full_threshold_pct", default=99.0)
         empty_threshold_pct = _get_float(section, "empty_threshold_pct", default=1.0)
-        
+
         tanks.append(
             TankConfig(
                 id=tank_id,

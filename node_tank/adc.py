@@ -4,6 +4,7 @@ No Venus OS IIO-sysfs dependency (dbus-ads1115 read via /sys/bus/i2c
 kernel IIO driver, which only exists on Venus OS images) — this talks to
 the chip directly over smbus2, since it runs on plain Raspberry Pi OS.
 """
+
 from __future__ import annotations
 
 import time

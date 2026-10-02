@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """node-tank entrypoint."""
+
 from __future__ import annotations
 
 import argparse

@@ -25,6 +25,7 @@ longer publishes. State files written by older versions (bare dates
 under the old key names) are upgraded in place on first read; see
 _migrate_timestamp_field.
 """
+
 from __future__ import annotations
 
 import json
@@ -59,13 +60,16 @@ _TIMESTAMP_FIELD_LEGACY_KEYS = {
 @dataclass
 class AlarmState:
     """Per-tank alarm state tracking (ticket 02)."""
+
     previous_state: str = "ok"  # "ok" or "alarm"
     delay_timer_start: float | None = None  # Time when threshold was crossed
 
 
 @dataclass
 class FullEmptyState:
-    """Per-tank last-full/last-empty one-shot latch tracking (flow-rate-full-empty-telemetry ticket 02)."""
+    """Per-tank last-full/last-empty one-shot latch tracking
+    (flow-rate-full-empty-telemetry ticket 02)."""
+
     full_latched: bool = False
     full_delay_start: float | None = None
     empty_latched: bool = False
@@ -75,6 +79,7 @@ class FullEmptyState:
 @dataclass
 class TankState:
     """Per-tank runtime state."""
+
     alarm: AlarmState = field(default_factory=AlarmState)
     last_inspected_at: str | None = None  # Most recent persisted timestamp (ISO-8601, local offset)
     full_empty: FullEmptyState = field(default_factory=FullEmptyState)
@@ -222,7 +227,7 @@ def _migrate_timestamp_field(tank_id: str, new_key: str) -> str | None:
 
 def publish_identity(publisher: Publisher, tank: TankConfig, tank_state: TankState) -> None:
     """Publish identity fields at startup (ticket 01, 06; hub schema v0.5 alarm config fields).
-    
+
     Identity fields (retained, published once at startup):
     - fluid_type, capacity_l (always)
     - alarm_direction, alarm_threshold_pct, alarm_restore_pct (only if alarm is configured --
@@ -236,25 +241,18 @@ def publish_identity(publisher: Publisher, tank: TankConfig, tank_state: TankSta
         publisher.publish(_topic(tank.id, "alarm_direction"), json.dumps(tank.alarm_direction))
         publisher.publish(_topic(tank.id, "alarm_threshold_pct"), json.dumps(tank.alarm_threshold))
         publisher.publish(_topic(tank.id, "alarm_restore_pct"), json.dumps(tank.alarm_restore))
-    
+
     # Republish persisted identity timestamps if they were loaded from state (ticket 06;
     # last_full_at/last_empty_at added by flow-rate-full-empty-telemetry ticket 02,
     # renamed from *_date by volume-timestamp-telemetry ticket 01)
     if tank_state.last_inspected_at is not None:
         publisher.publish(
-            _topic(tank.id, "last_inspected_at"),
-            json.dumps(tank_state.last_inspected_at)
+            _topic(tank.id, "last_inspected_at"), json.dumps(tank_state.last_inspected_at)
         )
     if tank_state.last_full_at is not None:
-        publisher.publish(
-            _topic(tank.id, "last_full_at"),
-            json.dumps(tank_state.last_full_at)
-        )
+        publisher.publish(_topic(tank.id, "last_full_at"), json.dumps(tank_state.last_full_at))
     if tank_state.last_empty_at is not None:
-        publisher.publish(
-            _topic(tank.id, "last_empty_at"),
-            json.dumps(tank_state.last_empty_at)
-        )
+        publisher.publish(_topic(tank.id, "last_empty_at"), json.dumps(tank_state.last_empty_at))
 
 
 def _crossed(direction: str, level_pct: float, boundary: float, entering_alarm: bool) -> bool:
@@ -304,7 +302,9 @@ def _compute_alarm_state(
         # Not past the relevant boundary: no pending transition, clear any timer.
         return previous, AlarmState(previous_state=previous)
 
-    delay_start = now if alarm_state_obj.delay_timer_start is None else alarm_state_obj.delay_timer_start
+    delay_start = (
+        now if alarm_state_obj.delay_timer_start is None else alarm_state_obj.delay_timer_start
+    )
 
     if tank.alarm_delay_s > 0 and (now - delay_start) < tank.alarm_delay_s:
         # Still within delay window: hold current state, keep timer running.
@@ -382,9 +382,15 @@ def _compute_full_empty_state(
         now=now,
         delay_s=tank.alarm_delay_s,
     )
-    return committed_full, committed_empty, FullEmptyState(
-        full_latched=full_latched, full_delay_start=full_delay_start,
-        empty_latched=empty_latched, empty_delay_start=empty_delay_start,
+    return (
+        committed_full,
+        committed_empty,
+        FullEmptyState(
+            full_latched=full_latched,
+            full_delay_start=full_delay_start,
+            empty_latched=empty_latched,
+            empty_delay_start=empty_delay_start,
+        ),
     )
 
 
@@ -416,6 +422,7 @@ def _compute_volume_since_latch(
     Returns:
         (volume_since_full_l, volume_since_empty_l)
     """
+
     def _volume(anchor: float | None) -> float:
         if anchor is None:
             return 0.0
@@ -434,7 +441,7 @@ def read_and_publish(
 ) -> None:
     """Read sensors and publish live fields (ticket 01, 02, 05;
     volume-timestamp-telemetry ticket 02).
-    
+
     Live fields (retained, republished on every read):
     - level_pct, status (always)
     - volume_since_full_l, volume_since_empty_l (always)
@@ -448,7 +455,7 @@ def read_and_publish(
     level_pct, status = tank.calibration.read(voltage)
     publisher.publish(_topic(tank.id, "level_pct"), json.dumps(round(level_pct, 1)))
     publisher.publish(_topic(tank.id, "status"), json.dumps(status.value))
-    
+
     # Compute and publish alarm state (ticket 02)
     new_alarm_state, updated_alarm_state = _compute_alarm_state(
         tank, level_pct, status.value, tank_state.alarm, now
@@ -456,7 +463,7 @@ def read_and_publish(
     tank_state.alarm = updated_alarm_state
     if tank.alarm_direction is not None:
         publisher.publish(_topic(tank.id, "alarm_state"), json.dumps(new_alarm_state))
-    
+
     # Compute last_full_at/last_empty_at auto-detection (flow-rate-full-empty-telemetry ticket 02)
     committed_full, committed_empty, updated_full_empty_state = _compute_full_empty_state(
         tank, level_pct, now, tank_state.full_empty
@@ -478,15 +485,19 @@ def read_and_publish(
         logger.info(f"Tank {tank.id}: last_empty_at auto-detected as {committed_empty}")
         tank_state.level_pct_at_empty_commit = level_pct
         _save_state_field(tank.id, "level_pct_at_empty_commit", level_pct)
-    
+
     # Compute and publish volume-since-latch -- unconditional live fields
     # (volume-timestamp-telemetry ticket 02)
     volume_since_full_l, volume_since_empty_l = _compute_volume_since_latch(
         tank, level_pct, tank_state.level_pct_at_full_commit, tank_state.level_pct_at_empty_commit
     )
-    publisher.publish(_topic(tank.id, "volume_since_full_l"), json.dumps(round(volume_since_full_l, 2)))
-    publisher.publish(_topic(tank.id, "volume_since_empty_l"), json.dumps(round(volume_since_empty_l, 2)))
-    
+    publisher.publish(
+        _topic(tank.id, "volume_since_full_l"), json.dumps(round(volume_since_full_l, 2))
+    )
+    publisher.publish(
+        _topic(tank.id, "volume_since_empty_l"), json.dumps(round(volume_since_empty_l, 2))
+    )
+
     # Read and publish temperature if configured (ticket 05)
     if tank.temp_sensor_id is not None:
         if tank.temp_sensor_id not in temperature_sensors:
@@ -495,13 +506,13 @@ def read_and_publish(
             except FileNotFoundError as e:
                 logger.warning(f"Tank {tank.id}: {e}")
                 return
-        
+
         try:
             temp_c = temperature_sensors[tank.temp_sensor_id].read_temperature_c()
             publisher.publish(_topic(tank.id, "temperature_c"), json.dumps(round(temp_c, 2)))
         except ValueError as e:
             logger.warning(f"Tank {tank.id}: Failed to read temperature: {e}")
-    
+
     logger.info(
         "tank=%s voltage=%.4fV level_pct=%.1f status=%s alarm=%s",
         tank.id,
@@ -535,7 +546,7 @@ def _handle_timestamp_set_command(
     except json.JSONDecodeError:
         logger.error(f"Tank {tank.id}: Invalid JSON in {field_name}/set: {payload}")
         return
-    
+
     # Validate + normalize to a full ISO-8601 timestamp, reject future values
     normalized = _normalize_timestamp_str(raw) if isinstance(raw, str) else None
     if normalized is None:
@@ -544,7 +555,7 @@ def _handle_timestamp_set_command(
             "(must be an ISO-8601 timestamp or YYYY-MM-DD, and not in the future)"
         )
         return
-    
+
     # Persist and publish -- manual writes go through unconditionally (last write
     # wins); auto-detection keeps running independently and may overwrite later.
     _save_state_field(tank.id, field_name, normalized)
@@ -556,11 +567,11 @@ def _handle_timestamp_set_command(
 def run(config: AppConfig) -> None:
     """Main publish loop (ticket 01, 02, 05, 06; flow-rate-full-empty-telemetry ticket 01, 02)."""
     _ensure_state_dir()
-    
+
     publisher = Publisher(config.mqtt)
     publisher.connect()
     adc = ADS1115(bus_number=config.i2c_bus, address=config.i2c_address)
-    
+
     # Initialize tank state objects
     tank_states: dict[str, TankState] = {}
     for tank in config.tanks:
@@ -577,27 +588,32 @@ def run(config: AppConfig) -> None:
         # None (no key present -- pre-upgrade state file) means "no anchor yet";
         # _compute_volume_since_latch publishes 0 until the next latch commit.
         tank_state.level_pct_at_full_commit = _load_state_field(tank.id, "level_pct_at_full_commit")
-        tank_state.level_pct_at_empty_commit = _load_state_field(tank.id, "level_pct_at_empty_commit")
+        tank_state.level_pct_at_empty_commit = _load_state_field(
+            tank.id, "level_pct_at_empty_commit"
+        )
         tank_states[tank.id] = tank_state
-    
+
     # Temperature sensor cache (ticket 05)
     temperature_sensors: dict[str, DS18B20] = {}
-    
+
     # Publish identity fields at startup
     for tank in config.tanks:
         publish_identity(publisher, tank, tank_states[tank.id])
-    
+
     # Subscribe to last_inspected_at/last_full_at/last_empty_at /set command
     # topics (ticket 06; last_full_at/last_empty_at added by ticket 02)
     for tank in config.tanks:
         for field_name in ("last_inspected_at", "last_full_at", "last_empty_at"):
             topic = _topic(tank.id, f"{field_name}/set")
+
             def make_callback(t: TankConfig, f: str) -> callable:
                 def callback(payload: str) -> None:
                     _handle_timestamp_set_command(publisher, t, tank_states[t.id], f, payload)
+
                 return callback
+
             publisher.subscribe(topic, make_callback(tank, field_name))
-    
+
     try:
         while True:
             now = time.time()

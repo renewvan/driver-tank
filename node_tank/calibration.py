@@ -6,6 +6,7 @@ stripped of every D-Bus/Venus-OS/settings concern. Pure functions and a
 small stateless Calibration value object: no MQTT, no I/O, no hardware
 access — safe to unit test with fixture voltages only.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

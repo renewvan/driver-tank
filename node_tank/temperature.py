@@ -6,6 +6,7 @@ No external dependencies beyond stdlib pathlib/open. Matches adc.py's I/O-bounda
 Ticket 05: DS18B20 config/topic shape.
 Research: research/04-ds18b20.md.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

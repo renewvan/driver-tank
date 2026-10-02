@@ -7,6 +7,7 @@ re-publisher).
 
 Ticket 06: Added subscription support for command topics (last_inspected_at/set).
 """
+
 from __future__ import annotations
 
 import logging
@@ -71,7 +72,7 @@ class Publisher:
 
     def subscribe(self, topic: str, callback: Callable[[str], None]) -> None:
         """Subscribe to a topic and call callback with the payload (ticket 06).
-        
+
         Args:
             topic: MQTT topic to subscribe to
             callback: Function to call with payload string when message arrives

@@ -3,6 +3,7 @@ machine, and for timestamp-command validation -- no MQTT broker or ADC.
 
 Prior art: tests/test_calibration.py (fixture input, pure function, no I/O).
 """
+
 import json
 from datetime import datetime, timedelta
 
@@ -33,7 +34,9 @@ def make_tank(
         fluid_type="fresh_water",
         capacity_l=capacity_l,
         update_interval_ms=3000,
-        calibration=Calibration(fixed_resistor=220, reference_voltage=3.3, sensor_min=0.0, sensor_max=190.0),
+        calibration=Calibration(
+            fixed_resistor=220, reference_voltage=3.3, sensor_min=0.0, sensor_max=190.0
+        ),
         alarm_direction=None,
         alarm_threshold=None,
         alarm_restore=None,
@@ -42,7 +45,6 @@ def make_tank(
         full_threshold_pct=full_threshold_pct,
         empty_threshold_pct=empty_threshold_pct,
     )
-
 
 
 # --- _compute_full_empty_state --------------------------------------------
@@ -173,7 +175,9 @@ def test_handle_timestamp_set_command_rejects_malformed_value(monkeypatch, tmp_p
     tank = make_tank()
     tank_state = TankState()
     publisher = _FakePublisher()
-    _handle_timestamp_set_command(publisher, tank, tank_state, "last_full_at", json.dumps("not-a-date"))
+    _handle_timestamp_set_command(
+        publisher, tank, tank_state, "last_full_at", json.dumps("not-a-date")
+    )
     assert publisher.published == []
     assert tank_state.last_full_at is None
 
@@ -193,18 +197,24 @@ def test_handle_timestamp_set_command_rejects_future_value(monkeypatch, tmp_path
     assert tank_state.last_empty_at is None
 
 
-def test_handle_timestamp_set_command_accepts_bare_date_and_persists_normalized(monkeypatch, tmp_path):
+def test_handle_timestamp_set_command_accepts_bare_date_and_persists_normalized(
+    monkeypatch, tmp_path
+):
     import node_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     tank = make_tank()
     tank_state = TankState()
     publisher = _FakePublisher()
-    _handle_timestamp_set_command(publisher, tank, tank_state, "last_full_at", json.dumps("2020-06-15"))
+    _handle_timestamp_set_command(
+        publisher, tank, tank_state, "last_full_at", json.dumps("2020-06-15")
+    )
     parsed = datetime.fromisoformat(tank_state.last_full_at)
     assert (parsed.year, parsed.month, parsed.day) == (2020, 6, 15)
     assert parsed.tzinfo is not None
-    assert publisher.published == [("renewvan/tank/fresh/last_full_at", json.dumps(tank_state.last_full_at))]
+    assert publisher.published == [
+        ("renewvan/tank/fresh/last_full_at", json.dumps(tank_state.last_full_at))
+    ]
     # Single round-trip persistence check (not exhaustive file-format testing).
     assert driver_mod._load_state_field("fresh", "last_full_at") == tank_state.last_full_at
 
@@ -243,7 +253,9 @@ def test_migrate_timestamp_field_upgrades_legacy_bare_date_in_place(monkeypatch,
     assert "last_full_date" not in on_disk
 
 
-def test_migrate_timestamp_field_reads_new_key_directly_when_already_upgraded(monkeypatch, tmp_path):
+def test_migrate_timestamp_field_reads_new_key_directly_when_already_upgraded(
+    monkeypatch, tmp_path
+):
     import node_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
@@ -345,7 +357,9 @@ def test_volume_since_full_l_survives_a_restart(monkeypatch, tmp_path):
         level_pct_at_full_commit=99.5,
     )
     pre_restart_volume, _ = _compute_volume_since_latch(
-        tank, level_pct=70.0, level_pct_at_full_commit=pre_restart_state.level_pct_at_full_commit,
+        tank,
+        level_pct=70.0,
+        level_pct_at_full_commit=pre_restart_state.level_pct_at_full_commit,
         level_pct_at_empty_commit=None,
     )
 
@@ -362,6 +376,7 @@ def test_volume_since_full_l_survives_a_restart(monkeypatch, tmp_path):
     publisher = _FakePublisher()
     adc = _FakeADC(voltage=0.0)  # irrelevant: Calibration.read is stubbed below
     from node_tank.calibration import Calibration, Status
+
     monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
     driver_mod.read_and_publish(publisher, adc, tank, post_restart_state, {}, now=0.0)
 
@@ -382,12 +397,15 @@ def test_volume_since_full_l_is_zero_when_upgrading_without_an_anchor(monkeypatc
     driver_mod._save_state_field("fresh", "last_full_at", "2020-06-15T00:00:00-04:00")
     tank_state = TankState()
     tank_state.last_full_at = driver_mod._migrate_timestamp_field("fresh", "last_full_at")
-    tank_state.level_pct_at_full_commit = driver_mod._load_state_field("fresh", "level_pct_at_full_commit")
+    tank_state.level_pct_at_full_commit = driver_mod._load_state_field(
+        "fresh", "level_pct_at_full_commit"
+    )
     assert tank_state.level_pct_at_full_commit is None
 
     publisher = _FakePublisher()
     adc = _FakeADC(voltage=0.0)  # irrelevant: Calibration.read is stubbed below
     from node_tank.calibration import Calibration, Status
+
     monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
     driver_mod.read_and_publish(publisher, adc, tank, tank_state, {}, now=0.0)
 
