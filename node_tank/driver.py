@@ -7,7 +7,7 @@ republished retained on every read (live fields).
 
 Additional publishers per spec (tickets 02, 05, 06):
 - alarm_state: live field if alarm is configured
-- temperature_c: live field if DS18B20 is configured
+- temperature_c: live field if an NTC temp_channel is configured
 - last_inspected_at: identity field, command via /set topic (unretained)
 
 Persistence boundary (ticket 06): config.py's config.ini is install-time
@@ -38,7 +38,6 @@ from dataclasses import dataclass, field
 from node_tank.adc import ADS1115
 from node_tank.config import AppConfig, TankConfig
 from node_tank.publisher import Publisher
-from node_tank.temperature import DS18B20
 
 logger = logging.getLogger(__name__)
 
@@ -436,7 +435,6 @@ def read_and_publish(
     adc: ADS1115,
     tank: TankConfig,
     tank_state: TankState,
-    temperature_sensors: dict[str, DS18B20],
     now: float,
 ) -> None:
     """Read sensors and publish live fields (ticket 01, 02, 05;
@@ -446,7 +444,7 @@ def read_and_publish(
     - level_pct, status (always)
     - volume_since_full_l, volume_since_empty_l (always)
     - alarm_state (if alarm is configured)
-    - temperature_c (if DS18B20 is configured)
+    - temperature_c (if an NTC temp_channel is configured)
     Identity fields republished only when they change:
     - last_full_at, last_empty_at (auto-detected on a sustained full/empty crossing)
     """
@@ -498,17 +496,11 @@ def read_and_publish(
         _topic(tank.id, "volume_since_empty_l"), json.dumps(round(volume_since_empty_l, 2))
     )
 
-    # Read and publish temperature if configured (ticket 05)
-    if tank.temp_sensor_id is not None:
-        if tank.temp_sensor_id not in temperature_sensors:
-            try:
-                temperature_sensors[tank.temp_sensor_id] = DS18B20(tank.temp_sensor_id)
-            except FileNotFoundError as e:
-                logger.warning(f"Tank {tank.id}: {e}")
-                return
-
+    # Read and publish temperature if configured (ntc-temperature-sensor effort)
+    if tank.temp_channel is not None and tank.temp_conversion is not None:
+        temp_voltage = adc.read_voltage(tank.temp_channel, _PGA_DEFAULT)
         try:
-            temp_c = temperature_sensors[tank.temp_sensor_id].read_temperature_c()
+            temp_c = tank.temp_conversion.read_temperature_c(temp_voltage)
             publisher.publish(_topic(tank.id, "temperature_c"), json.dumps(round(temp_c, 2)))
         except ValueError as e:
             logger.warning(f"Tank {tank.id}: Failed to read temperature: {e}")
@@ -593,9 +585,6 @@ def run(config: AppConfig) -> None:
         )
         tank_states[tank.id] = tank_state
 
-    # Temperature sensor cache (ticket 05)
-    temperature_sensors: dict[str, DS18B20] = {}
-
     # Publish identity fields at startup
     for tank in config.tanks:
         publish_identity(publisher, tank, tank_states[tank.id])
@@ -619,9 +608,7 @@ def run(config: AppConfig) -> None:
             now = time.time()
             for tank in config.tanks:
                 try:
-                    read_and_publish(
-                        publisher, adc, tank, tank_states[tank.id], temperature_sensors, now
-                    )
+                    read_and_publish(publisher, adc, tank, tank_states[tank.id], now)
                 except Exception:
                     logger.exception("Read failed for tank=%s", tank.id)
             time.sleep(min(t.update_interval_ms for t in config.tanks) / 1000.0)

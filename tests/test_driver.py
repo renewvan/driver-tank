@@ -41,7 +41,8 @@ def make_tank(
         alarm_threshold=None,
         alarm_restore=None,
         alarm_delay_s=alarm_delay_s,
-        temp_sensor_id=None,
+        temp_channel=None,
+        temp_conversion=None,
         full_threshold_pct=full_threshold_pct,
         empty_threshold_pct=empty_threshold_pct,
     )
@@ -378,7 +379,7 @@ def test_volume_since_full_l_survives_a_restart(monkeypatch, tmp_path):
     from node_tank.calibration import Calibration, Status
 
     monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
-    driver_mod.read_and_publish(publisher, adc, tank, post_restart_state, {}, now=0.0)
+    driver_mod.read_and_publish(publisher, adc, tank, post_restart_state, now=0.0)
 
     published = dict(publisher.published)
     post_restart_volume = json.loads(published["renewvan/tank/fresh/volume_since_full_l"])
@@ -407,7 +408,73 @@ def test_volume_since_full_l_is_zero_when_upgrading_without_an_anchor(monkeypatc
     from node_tank.calibration import Calibration, Status
 
     monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
-    driver_mod.read_and_publish(publisher, adc, tank, tank_state, {}, now=0.0)
+    driver_mod.read_and_publish(publisher, adc, tank, tank_state, now=0.0)
 
     published = dict(publisher.published)
     assert json.loads(published["renewvan/tank/fresh/volume_since_full_l"]) == 0.0
+
+
+# --- temperature publish/skip (ntc-temperature-sensor effort) -------------
+
+
+class _ChannelADC:
+    """Fake ADS1115 returning a per-channel voltage (level + NTC divider)."""
+
+    def __init__(self, voltages: dict[int, float]):
+        self.voltages = voltages
+
+    def read_voltage(self, channel: int, pga) -> float:
+        return self.voltages[channel]
+
+
+def _temp_reading_tank() -> TankConfig:
+    from dataclasses import replace
+
+    from node_tank.temperature import NTCConversion
+
+    return replace(
+        make_tank(),
+        temp_channel=2,
+        temp_conversion=NTCConversion(
+            nominal_ohm=10000.0,
+            beta=3950.0,
+            fixed_resistor_ohm=10000.0,
+            thermistor_low_side=True,
+            reference_voltage=3.3,
+        ),
+    )
+
+
+def _read_with_temp(monkeypatch, adc) -> dict:
+    import node_tank.driver as driver_mod
+    from node_tank.calibration import Calibration, Status
+
+    monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
+    publisher = _FakePublisher()
+    driver_mod.read_and_publish(publisher, adc, _temp_reading_tank(), TankState(), now=0.0)
+    return dict(publisher.published)
+
+
+def test_temperature_c_published_from_ntc_divider(monkeypatch):
+    # Level sender on A0 (stubbed); NTC divider on A2 at mid-rail = 25.0 C.
+    published = _read_with_temp(monkeypatch, _ChannelADC({0: 0.0, 2: 1.65}))
+    assert json.loads(published["renewvan/tank/fresh/temperature_c"]) == 25.0
+
+
+def test_open_ntc_skips_temperature_publish_but_not_level(monkeypatch):
+    # Tap pegged at the rail = open thermistor: warn + skip temperature_c,
+    # every other live field still publishes.
+    published = _read_with_temp(monkeypatch, _ChannelADC({0: 0.0, 2: 3.3}))
+    assert "renewvan/tank/fresh/temperature_c" not in published
+    assert "renewvan/tank/fresh/level_pct" in published
+    assert "renewvan/tank/fresh/status" in published
+
+
+def test_unconfigured_temp_channel_publishes_nothing_temperature(monkeypatch):
+    import node_tank.driver as driver_mod
+    from node_tank.calibration import Calibration, Status
+
+    monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
+    publisher = _FakePublisher()
+    driver_mod.read_and_publish(publisher, _FakeADC(0.0), make_tank(), TankState(), now=0.0)
+    assert "renewvan/tank/fresh/temperature_c" not in dict(publisher.published)

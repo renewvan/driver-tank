@@ -32,7 +32,7 @@ Retained, under `renewvan/tank/<fresh|grey>/`:
 - `level_pct` — number 0–100 (raw sender reading; alarms/full-empty latching key off this)
 - `status` — `ok` / `open_circuit` / `short_circuit` (ADS1115 sensor health)
 - `alarm_state` — `ok` / `alarm` (optional, only if alarm is configured per tank)
-- `temperature_c` — number, degrees Celsius (optional, only if DS18B20 is configured per tank)
+- `temperature_c` — number, degrees Celsius (optional, only if an NTC temp channel is configured per tank)
 
 **Command topics** (unretained, for external control):
 - `renewvan/tank/<id>/last_inspected_at/set` — payload: JSON string, ISO-8601 timestamp (e.g., `"2026-09-29T14:32:05-04:00"`) or bare `YYYY-MM-DD` (e.g., `"2026-09-29"`, normalized to local midnight); node validates and republishes to state topic on success
@@ -78,49 +78,41 @@ Configure `sensor_min`/`sensor_max` (resistance in ohms at EMPTY/FULL) and `fixe
 2. Reboot
 3. Verify: `i2cdetect -y 1` should list your ADS1115 at address 0x48
 
-### DS18B20 water-temperature sensor (optional per tank)
+### NTC water-temperature sensor (optional per tank)
 
-One-Wire digital thermometer for measuring tank water temperature.
+A 10 kΩ NTC thermistor wired as a voltage divider on a **spare ADS1115 channel** — the same chip and read path as the level senders; no 1-Wire support (DS18B20 was removed in v0.8.0).
 
-**1-Wire enablement on Raspberry Pi**:
-1. Add `dtoverlay=w1-gpio` to `/boot/config.txt` (or `/u-boot/config.txt` / `/mnt/boot/config.txt` on Pi 4; check all three)
-2. Optionally override the default GPIO pin (4): `dtoverlay=w1-gpio,gpiopin=x`
-3. Reboot
-4. Verify: `ls /sys/bus/w1/devices/` should list `28-<rom-id>` directories for each sensor
+Channel convention: the temp channel pairs with the tank's level channel — level on A0 → temp on **A2**, level on A1 → temp on **A3**.
 
-**Wiring: externally powered (recommended, 3-wire)**:
+**Wiring** (10 kΩ fixed resistor + 10 kΩ NTC across the 3.3 V rail, ADC tap in the middle):
 
 ```
-DS18B20 (TO-92 package):
-  Pin 1 (GND)  → GND (Pi pin 6, 9, 14, 20, 25, 30, 34, or 39)
-  Pin 2 (DQ)   → GPIO4 (Pi pin 7) with external 4.7kΩ pull-up resistor to 3.3V
-  Pin 3 (VDD)  → 3.3V (Pi pin 1 or 17)
+Thermistor low-side (default, temp_ntc_thermistor_low_side = true):
+  3.3V ──[10k fixed]──┬── ADS1115 A2 (or A3)
+                      └──[NTC 10k]── GND
+
+Thermistor high-side (temp_ntc_thermistor_low_side = false):
+  3.3V ──[NTC 10k]────┬── ADS1115 A2 (or A3)
+                      └──[10k fixed]── GND
 ```
 
-The **external 4.7 kΩ pull-up resistor is required**. The Pi's internal GPIO pull-ups (~50 kΩ) are too weak for reliable 1-Wire communication.
+**Which orientation do I have?** Warm the thermistor with a finger and watch the tap voltage (or the published `temperature_c`): low-side wiring makes the tap voltage **fall** as it warms, high-side makes it **rise**. If readings move the wrong way, flip `temp_ntc_thermistor_low_side` in `config.ini` — no rewiring needed.
 
-**Wiring: parasitic power (optional, 2-wire, less reliable)**:
+**Configuration** — in `config.ini`, set the tank's divider channel:
 
-If space is constrained, VDD can be tied to GND (chip powered via pull-up during conversion):
+```ini
+[tank.fresh]
+temp_channel = 2
+; defaults (generic 10k NTC, B=3950, 10k fixed resistor) — override per install:
+; temp_ntc_nominal_ohm       = 10000
+; temp_ntc_beta              = 3950
+; temp_ntc_fixed_resistor_ohm = 10000
+; temp_ntc_thermistor_low_side = true
 ```
-  Pin 1 (GND)  → GND
-  Pin 2 (DQ)   → GPIO4 (Pi pin 7) with external 4.7kΩ pull-up to 3.3V
-  Pin 3 (VDD)  → GND
-```
-Add `pullup="y"` to the overlay for stronger pull-up: `dtoverlay=w1-gpio,pullup="y"`
 
-More error-prone; externally powered is preferred.
+Restart the node; it publishes `temperature_c` live (same interval as `level_pct`), converted via the beta equation `1/T = 1/T₀ + (1/B)·ln(R/R₀)`.
 
-**Configuration**:
-1. Discover sensor ROM ID: `ls /sys/bus/w1/devices/` → note the `28-<rom-id>` directory
-2. In `config.default.ini` or `config.ini`, add `temp_sensor_id = 28-<rom-id>` to the tank section:
-   ```ini
-   [tank.fresh]
-   temp_sensor_id = 28-0521a2e0cfff
-   ```
-3. Restart the node; it will publish `temperature_c` live (same interval as `level_pct`)
-
-Omit `temp_sensor_id` to disable temperature sensing for a tank.
+Omit `temp_channel` to disable temperature sensing for a tank. An open thermistor (reads >10× nominal) or short (<nominal/20) is logged as a warning and skips the publish — the tank's `status` field stays level-sender health only.
 
 ## Development
 

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from node_tank.calibration import Calibration, parse_shape
+from node_tank.temperature import NTCConversion
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +62,9 @@ class TankConfig:
     alarm_threshold: float | None  # level % that triggers alarm
     alarm_restore: float | None  # level % that clears alarm
     alarm_delay_s: float  # seconds to wait after threshold crossed (default 0)
-    # Temperature sensor (ticket 05)
-    temp_sensor_id: str | None  # 1-Wire ROM ID for DS18B20, None if not configured
+    # Temperature sensor (ntc-temperature-sensor effort; DS18B20 removed)
+    temp_channel: int | None  # ADS1115 channel for the NTC divider, None if not configured
+    temp_conversion: NTCConversion | None  # built iff temp_channel is set
     # Full/empty timestamp tracking (flow-rate-full-empty-telemetry ticket 02;
     # renamed from *_date to *_at, volume-timestamp-telemetry ticket 01)
     full_threshold_pct: float  # in-band threshold for last_full_at (default 99)
@@ -176,9 +178,26 @@ def load_config(
         alarm_restore = _get_float(section, "alarm_restore", default=None)
         alarm_delay_s = _get_float(section, "alarm_delay_s", default=0.0)
 
-        # Temperature sensor (ticket 05)
-        temp_sensor_id = section.get("temp_sensor_id", fallback=None)
-        temp_sensor_id = temp_sensor_id.strip() if temp_sensor_id else None
+        # Temperature sensor (ntc-temperature-sensor effort)
+        temp_channel_raw = section.get("temp_channel", fallback=None)
+        temp_channel = int(temp_channel_raw) if temp_channel_raw else None
+        temp_conversion = (
+            NTCConversion(
+                nominal_ohm=_get_float(section, "temp_ntc_nominal_ohm", default=10000.0),
+                beta=_get_float(section, "temp_ntc_beta", default=3950.0),
+                fixed_resistor_ohm=_get_float(
+                    section, "temp_ntc_fixed_resistor_ohm", default=10000.0
+                ),
+                thermistor_low_side=section.getboolean(
+                    "temp_ntc_thermistor_low_side", fallback=True
+                ),
+                reference_voltage=_get_float(
+                    section, "reference_voltage", i2c.getfloat("reference_voltage", 3.3)
+                ),
+            )
+            if temp_channel is not None
+            else None
+        )
 
         # Full/empty date tracking (flow-rate-full-empty-telemetry ticket 02)
         full_threshold_pct = _get_float(section, "full_threshold_pct", default=99.0)
@@ -197,7 +216,8 @@ def load_config(
                 alarm_threshold=alarm_threshold,
                 alarm_restore=alarm_restore,
                 alarm_delay_s=alarm_delay_s,
-                temp_sensor_id=temp_sensor_id,
+                temp_channel=temp_channel,
+                temp_conversion=temp_conversion,
                 full_threshold_pct=full_threshold_pct,
                 empty_threshold_pct=empty_threshold_pct,
             )
