@@ -38,6 +38,8 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            NODE_VERSION=${{ github.event.release.tag_name }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/node-tank:${{ github.event.release.tag_name }}
             ghcr.io/${{ github.repository_owner }}/node-tank:latest
