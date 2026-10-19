@@ -74,10 +74,35 @@ For each tank, the ADS1115 reads a variable resistor (the tank-level sender).
 Each tank's calibration maps sender resistance → level %.  
 Configure `sensor_min`/`sensor_max` (resistance in ohms at EMPTY/FULL) and `fixed_resistor` in `config.default.ini`.
 
-**Enable I2C on Raspberry Pi**:
-1. Run `raspi-config` → Interfacing Options → I2C → Enable
-2. Reboot
-3. Verify: `i2cdetect -y 1` should list your ADS1115 at address 0x48
+**Enable I2C on Raspberry Pi (one-time prerequisite)**:
+
+A stock Raspberry Pi OS image ships with I2C **disabled**, so `/dev/i2c-1` does not exist until you turn it on. Without it the container fails at start with a message that looks like a compose or driver bug:
+
+```
+Error response from daemon: error gathering device information while adding custom device "/dev/i2c-1": no such file or directory
+```
+
+1. Enable I2C, either way:
+   - `sudo raspi-config` → Interface Options → I2C → Enable, or
+   - uncomment `dtparam=i2c_arm=on` in `/boot/firmware/config.txt`.
+2. Reboot.
+3. Install the tools and scan the bus: `sudo apt-get install -y i2c-tools && i2cdetect -y 1`
+
+A successful scan shows the ADS1115 at its address (`48` by default, with the ADDR pin tied to GND; it changes with the ADDR pin, see `config.default.ini`):
+
+```
+     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+00:                         -- -- -- -- -- -- -- --
+10: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+20: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+30: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+40: -- -- -- -- -- -- -- -- 48 -- -- -- -- -- -- --
+50: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+60: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+70: -- -- -- -- -- -- -- --
+```
+
+If every cell is `--`, check the wiring (SDA/SCL, 3.3 V, GND) and the ADDR pin. If `i2cdetect` reports `Could not open file /dev/i2c-1`, I2C is still disabled: redo step 1 and reboot. Only once `/dev/i2c-1` exists can the hub's `docker-compose.yml` pass it through (`devices: ["/dev/i2c-1:/dev/i2c-1"]`).
 
 ### NTC water-temperature sensor (optional per tank)
 
