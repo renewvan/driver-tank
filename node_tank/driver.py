@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,7 @@ from dataclasses import dataclass, field
 
 from node_tank.adc import ADS1115
 from node_tank.config import AppConfig, TankConfig
+from node_tank.node_info import build_info, read_host_serial
 from node_tank.publisher import Publisher
 
 logger = logging.getLogger(__name__)
@@ -560,7 +562,10 @@ def run(config: AppConfig) -> None:
     """Main publish loop (ticket 01, 02, 05, 06; flow-rate-full-empty-telemetry ticket 01, 02)."""
     _ensure_state_dir()
 
-    publisher = Publisher(config.mqtt)
+    # Version is stamped by the release build (NODE_VERSION); unset reports "dev".
+    # Host serial is read once, here, at process start.
+    info = build_info(os.environ.get("NODE_VERSION"), read_host_serial())
+    publisher = Publisher(config.mqtt, info)
     publisher.connect()
     adc = ADS1115(bus_number=config.i2c_bus, address=config.i2c_address)
 

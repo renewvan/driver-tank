@@ -478,3 +478,37 @@ def test_unconfigured_temp_channel_publishes_nothing_temperature(monkeypatch):
     publisher = _FakePublisher()
     driver_mod.read_and_publish(publisher, _FakeADC(0.0), make_tank(), TankState(), now=0.0)
     assert "renewvan/tank/fresh/temperature_c" not in dict(publisher.published)
+
+
+def test_run_stamps_node_version_env_into_published_info(monkeypatch) -> None:
+    import node_tank.driver as driver
+    from node_tank.config import load_config
+
+    config = load_config()
+    captured: dict[str, str] = {}
+
+    class StopRun(Exception):
+        pass
+
+    class SpyPublisher:
+        def __init__(self, mqtt_config, info: str) -> None:
+            captured["info"] = info
+
+        def connect(self) -> None:
+            raise StopRun
+
+        def disconnect(self) -> None: ...
+
+    monkeypatch.setattr(driver, "Publisher", SpyPublisher)
+    monkeypatch.setattr(driver, "read_host_serial", lambda: None)
+
+    for env, expected in (("v4.5.6", "v4.5.6"), (None, "dev")):
+        if env is None:
+            monkeypatch.delenv("NODE_VERSION", raising=False)
+        else:
+            monkeypatch.setenv("NODE_VERSION", env)
+        try:
+            driver.run(config)
+        except StopRun:
+            pass
+        assert json.loads(captured["info"])["version"] == expected
