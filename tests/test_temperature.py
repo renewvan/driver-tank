@@ -11,7 +11,7 @@ with a 10k fixed resistor on a 3.3V rail:
 
 import pytest
 
-from node_tank.temperature import NTCConversion
+from driver_tank.temperature import NTCConversion
 
 
 def make_conversion(*, thermistor_low_side: bool) -> NTCConversion:

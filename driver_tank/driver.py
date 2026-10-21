@@ -1,7 +1,7 @@
 """Publish loop: ADC read -> calibration math -> renewvan/tank/<id>/<property>.
 
 Field/topic shape per hub's schema/tank.schema.json and
-docs/porting-dbus-to-mqtt-node.md: fluid_type/capacity_l published
+docs/porting-dbus-to-mqtt-device.md: fluid_type/capacity_l published
 retained at startup (identity fields, rarely change), level_pct/status
 republished retained on every read (live fields).
 
@@ -36,10 +36,10 @@ from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 
-from node_tank.adc import ADS1115
-from node_tank.config import AppConfig, TankConfig
-from node_tank.node_info import build_info, read_host_serial
-from node_tank.publisher import Publisher
+from driver_tank.adc import ADS1115
+from driver_tank.config import AppConfig, TankConfig
+from driver_tank.device_info import build_info, read_board_serial
+from driver_tank.publisher import Publisher
 
 logger = logging.getLogger(__name__)
 
@@ -562,9 +562,9 @@ def run(config: AppConfig) -> None:
     """Main publish loop (ticket 01, 02, 05, 06; flow-rate-full-empty-telemetry ticket 01, 02)."""
     _ensure_state_dir()
 
-    # Version is stamped by the release build (NODE_VERSION); unset reports "dev".
-    # Host serial is read once, here, at process start.
-    info = build_info(os.environ.get("NODE_VERSION"), read_host_serial())
+    # Version is stamped by the release build (DEVICE_VERSION); unset reports "dev".
+    # Board serial is read once, here, at process start.
+    info = build_info(os.environ.get("DEVICE_VERSION"), read_board_serial())
     publisher = Publisher(config.mqtt, info)
     publisher.connect()
     adc = ADS1115(bus_number=config.i2c_bus, address=config.i2c_address)

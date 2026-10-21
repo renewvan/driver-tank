@@ -1,8 +1,8 @@
 {
-  "node": "tank",
-  "product": "ADS1115 resistive tank sender node",
+  "device": "tank",
+  "product": "ADS1115 resistive tank sender device",
   "source": "ADS1115 analog-to-digital converter over I2C",
   "publishes": ["tank"],
   "manufacturer": "renewvan",
-  "homepage": "https://github.com/renewvan/node-tank"
+  "homepage": "https://github.com/renewvan/driver-tank"
 }

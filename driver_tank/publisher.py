@@ -1,8 +1,8 @@
 """Persistent MQTT connection with LWT and a retained-topic publish helper.
 
-Per docs/porting-dbus-to-mqtt-node.md: connect with retry/backoff, an
-LWT on a status topic so downstream consumers can detect a dead node,
-and a long-lived connection (this node is the source of truth, not a
+Per docs/porting-dbus-to-mqtt-device.md: connect with retry/backoff, an
+LWT on a status topic so downstream consumers can detect a dead device,
+and a long-lived connection (this device is the source of truth, not a
 re-publisher).
 
 Ticket 06: Added subscription support for command topics (last_inspected_at/set).
@@ -15,7 +15,7 @@ from typing import Callable
 
 import paho.mqtt.client as mqtt
 
-from node_tank.config import MqttConfig
+from driver_tank.config import MqttConfig
 
 logger = logging.getLogger(__name__)
 

@@ -7,9 +7,9 @@ Prior art: tests/test_calibration.py (fixture input, pure function, no I/O).
 import json
 from datetime import datetime, timedelta
 
-from node_tank.calibration import Calibration
-from node_tank.config import TankConfig
-from node_tank.driver import (
+from driver_tank.calibration import Calibration
+from driver_tank.config import TankConfig
+from driver_tank.driver import (
     FullEmptyState,
     TankState,
     _compute_full_empty_state,
@@ -170,7 +170,7 @@ class _FakePublisher:
 
 
 def test_handle_timestamp_set_command_rejects_malformed_value(monkeypatch, tmp_path):
-    import node_tank.driver as driver_mod
+    import driver_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     tank = make_tank()
@@ -184,7 +184,7 @@ def test_handle_timestamp_set_command_rejects_malformed_value(monkeypatch, tmp_p
 
 
 def test_handle_timestamp_set_command_rejects_future_value(monkeypatch, tmp_path):
-    import node_tank.driver as driver_mod
+    import driver_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     future_year = datetime.now().year + 5
@@ -201,7 +201,7 @@ def test_handle_timestamp_set_command_rejects_future_value(monkeypatch, tmp_path
 def test_handle_timestamp_set_command_accepts_bare_date_and_persists_normalized(
     monkeypatch, tmp_path
 ):
-    import node_tank.driver as driver_mod
+    import driver_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     tank = make_tank()
@@ -221,7 +221,7 @@ def test_handle_timestamp_set_command_accepts_bare_date_and_persists_normalized(
 
 
 def test_handle_timestamp_set_command_accepts_full_timestamp(monkeypatch, tmp_path):
-    import node_tank.driver as driver_mod
+    import driver_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     tank = make_tank()
@@ -237,7 +237,7 @@ def test_handle_timestamp_set_command_accepts_full_timestamp(monkeypatch, tmp_pa
 
 
 def test_migrate_timestamp_field_upgrades_legacy_bare_date_in_place(monkeypatch, tmp_path):
-    import node_tank.driver as driver_mod
+    import driver_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     state_file = tmp_path / "fresh.json"
@@ -257,7 +257,7 @@ def test_migrate_timestamp_field_upgrades_legacy_bare_date_in_place(monkeypatch,
 def test_migrate_timestamp_field_reads_new_key_directly_when_already_upgraded(
     monkeypatch, tmp_path
 ):
-    import node_tank.driver as driver_mod
+    import driver_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     state_file = tmp_path / "fresh.json"
@@ -268,7 +268,7 @@ def test_migrate_timestamp_field_reads_new_key_directly_when_already_upgraded(
 
 
 def test_migrate_timestamp_field_returns_none_when_no_state_file(tmp_path, monkeypatch):
-    import node_tank.driver as driver_mod
+    import driver_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     assert _migrate_timestamp_field("fresh", "last_full_at") is None
@@ -347,7 +347,7 @@ def test_volume_since_full_l_survives_a_restart(monkeypatch, tmp_path):
     last_full_at pair (simulating a restart) reproduces the same
     volume_since_full_l a live process would have shown pre-restart --
     the anchor is identity data (persisted), not process-lifetime state."""
-    import node_tank.driver as driver_mod
+    import driver_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     tank = make_tank(capacity_l=100.0)
@@ -376,7 +376,7 @@ def test_volume_since_full_l_survives_a_restart(monkeypatch, tmp_path):
 
     publisher = _FakePublisher()
     adc = _FakeADC(voltage=0.0)  # irrelevant: Calibration.read is stubbed below
-    from node_tank.calibration import Calibration, Status
+    from driver_tank.calibration import Calibration, Status
 
     monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
     driver_mod.read_and_publish(publisher, adc, tank, post_restart_state, now=0.0)
@@ -390,7 +390,7 @@ def test_volume_since_full_l_is_zero_when_upgrading_without_an_anchor(monkeypatc
     """A state file with last_full_at but no level_pct_at_full_commit (an
     install upgrading from before this feature existed) publishes 0 until
     the next latch commit re-establishes both keys together."""
-    import node_tank.driver as driver_mod
+    import driver_tank.driver as driver_mod
 
     monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
     tank = make_tank(capacity_l=100.0, full_threshold_pct=99.0)
@@ -405,7 +405,7 @@ def test_volume_since_full_l_is_zero_when_upgrading_without_an_anchor(monkeypatc
 
     publisher = _FakePublisher()
     adc = _FakeADC(voltage=0.0)  # irrelevant: Calibration.read is stubbed below
-    from node_tank.calibration import Calibration, Status
+    from driver_tank.calibration import Calibration, Status
 
     monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
     driver_mod.read_and_publish(publisher, adc, tank, tank_state, now=0.0)
@@ -430,7 +430,7 @@ class _ChannelADC:
 def _temp_reading_tank() -> TankConfig:
     from dataclasses import replace
 
-    from node_tank.temperature import NTCConversion
+    from driver_tank.temperature import NTCConversion
 
     return replace(
         make_tank(),
@@ -446,8 +446,8 @@ def _temp_reading_tank() -> TankConfig:
 
 
 def _read_with_temp(monkeypatch, adc) -> dict:
-    import node_tank.driver as driver_mod
-    from node_tank.calibration import Calibration, Status
+    import driver_tank.driver as driver_mod
+    from driver_tank.calibration import Calibration, Status
 
     monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
     publisher = _FakePublisher()
@@ -471,8 +471,8 @@ def test_open_ntc_skips_temperature_publish_but_not_level(monkeypatch):
 
 
 def test_unconfigured_temp_channel_publishes_nothing_temperature(monkeypatch):
-    import node_tank.driver as driver_mod
-    from node_tank.calibration import Calibration, Status
+    import driver_tank.driver as driver_mod
+    from driver_tank.calibration import Calibration, Status
 
     monkeypatch.setattr(Calibration, "read", lambda self, voltage: (70.0, Status.OK))
     publisher = _FakePublisher()
@@ -480,9 +480,9 @@ def test_unconfigured_temp_channel_publishes_nothing_temperature(monkeypatch):
     assert "renewvan/tank/fresh/temperature_c" not in dict(publisher.published)
 
 
-def test_run_stamps_node_version_env_into_published_info(monkeypatch) -> None:
-    import node_tank.driver as driver
-    from node_tank.config import load_config
+def test_run_stamps_device_version_env_into_published_info(monkeypatch) -> None:
+    import driver_tank.driver as driver
+    from driver_tank.config import load_config
 
     config = load_config()
     captured: dict[str, str] = {}
@@ -500,13 +500,13 @@ def test_run_stamps_node_version_env_into_published_info(monkeypatch) -> None:
         def disconnect(self) -> None: ...
 
     monkeypatch.setattr(driver, "Publisher", SpyPublisher)
-    monkeypatch.setattr(driver, "read_host_serial", lambda: None)
+    monkeypatch.setattr(driver, "read_board_serial", lambda: None)
 
     for env, expected in (("v4.5.6", "v4.5.6"), (None, "dev")):
         if env is None:
-            monkeypatch.delenv("NODE_VERSION", raising=False)
+            monkeypatch.delenv("DEVICE_VERSION", raising=False)
         else:
-            monkeypatch.setenv("NODE_VERSION", env)
+            monkeypatch.setenv("DEVICE_VERSION", env)
         try:
             driver.run(config)
         except StopRun:

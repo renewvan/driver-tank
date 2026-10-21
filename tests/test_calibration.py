@@ -1,6 +1,6 @@
 """Fixture-voltage tests for calibration math — no MQTT broker or hardware."""
 
-from node_tank.calibration import (
+from driver_tank.calibration import (
     Calibration,
     Status,
     ShapePoint,

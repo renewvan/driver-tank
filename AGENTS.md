@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues and specs live as markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+Issues and specs live in GitHub Issues. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

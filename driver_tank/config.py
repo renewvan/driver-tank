@@ -13,8 +13,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from node_tank.calibration import Calibration, parse_shape
-from node_tank.temperature import NTCConversion
+from driver_tank.calibration import Calibration, parse_shape
+from driver_tank.temperature import NTCConversion
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ def load_config(
         port=mqtt_section.getint("port", 1883),
         username=mqtt_section.get("username", fallback=None) or None,
         password=mqtt_section.get("password", fallback=None) or None,
-        client_id=mqtt_section.get("client_id", "node-tank"),
+        client_id=mqtt_section.get("client_id", "driver-tank"),
         reconnect_min_delay=mqtt_section.getfloat("reconnect_min_delay", 1.0),
         reconnect_max_delay=mqtt_section.getfloat("reconnect_max_delay", 30.0),
     )

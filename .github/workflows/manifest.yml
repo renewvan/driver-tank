@@ -19,16 +19,16 @@ jobs:
 
       - name: Fetch the hub manifest schema at the pinned ref
         run: |
-          curl -fsSL -o node-manifest.schema.json \
-            "https://raw.githubusercontent.com/renewvan/hub/${HUB_REF}/schema/node-manifest.schema.json"
+          curl -fsSL -o device-manifest.schema.json \
+            "https://raw.githubusercontent.com/renewvan/hub/${HUB_REF}/schema/device-manifest.schema.json"
 
       - name: Validate manifest.json
-        run: npx --yes ajv-cli@5 validate -s node-manifest.schema.json -d manifest.json
+        run: npx --yes ajv-cli@5 validate -s device-manifest.schema.json -d manifest.json
 
       - name: Gate rejects a manifest that contains version
         run: |
           jq '. + {version: "v0.0.0"}' manifest.json > manifest-with-version.json
-          if npx --yes ajv-cli@5 validate -s node-manifest.schema.json -d manifest-with-version.json; then
+          if npx --yes ajv-cli@5 validate -s device-manifest.schema.json -d manifest-with-version.json; then
             echo "gate accepted a manifest containing version" >&2
             exit 1
           fi

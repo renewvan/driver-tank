@@ -1,15 +1,15 @@
 import json
 from pathlib import Path
 
-from node_tank.node_info import build_info, read_host_serial
+from driver_tank.device_info import build_info, read_board_serial
 
 MANIFEST = {
-    "node": "tank",
+    "device": "tank",
     "product": "Test product",
     "source": "Test source",
     "publishes": ["tank"],
     "manufacturer": "Acme",
-    "homepage": "https://example.com/node",
+    "homepage": "https://example.com/device",
 }
 
 
@@ -46,30 +46,30 @@ PI_CPUINFO = (
 )
 
 
-def test_host_serial_is_the_serial_line_of_cpuinfo(tmp_path: Path) -> None:
-    assert read_host_serial(write_cpuinfo(tmp_path, PI_CPUINFO)) == "00000000a1b2c3d4"
+def test_board_serial_is_the_serial_line_of_cpuinfo(tmp_path: Path) -> None:
+    assert read_board_serial(write_cpuinfo(tmp_path, PI_CPUINFO)) == "00000000a1b2c3d4"
 
 
-def test_host_serial_omitted_when_unavailable(tmp_path: Path) -> None:
+def test_board_serial_omitted_when_unavailable(tmp_path: Path) -> None:
     no_serial = "processor\t: 0\nmodel name\t: x86\n"
     empty = "processor\t: 0\nSerial\t\t: \n"
     all_zero = "processor\t: 0\nSerial\t\t: 0000000000000000\n"
     for text in (no_serial, empty, all_zero):
-        assert read_host_serial(write_cpuinfo(tmp_path, text)) is None
-    assert read_host_serial(tmp_path / "does-not-exist") is None
+        assert read_board_serial(write_cpuinfo(tmp_path, text)) is None
+    assert read_board_serial(tmp_path / "does-not-exist") is None
 
 
 def test_unavailable_serial_is_absent_from_info_not_a_placeholder(tmp_path: Path) -> None:
     info = json.loads(
-        build_info("v1", read_host_serial(tmp_path / "nope"), write_manifest(tmp_path))
+        build_info("v1", read_board_serial(tmp_path / "nope"), write_manifest(tmp_path))
     )
-    assert "host_serial" not in info
+    assert "board_serial" not in info
 
 
 def test_available_serial_is_published_as_is(tmp_path: Path) -> None:
-    serial = read_host_serial(write_cpuinfo(tmp_path, PI_CPUINFO))
+    serial = read_board_serial(write_cpuinfo(tmp_path, PI_CPUINFO))
     info = json.loads(build_info("v1", serial, write_manifest(tmp_path)))
-    assert info["host_serial"] == "00000000a1b2c3d4"
+    assert info["board_serial"] == "00000000a1b2c3d4"
 
 
 def test_default_manifest_is_the_repo_root_file_in_a_checkout() -> None:
@@ -81,7 +81,7 @@ def test_default_manifest_is_the_repo_root_file_in_a_checkout() -> None:
 
 
 def test_manifest_beside_the_module_wins_over_the_repo_root(tmp_path: Path, monkeypatch) -> None:
-    import node_tank.node_info as node_info
+    import driver_tank.device_info as device_info
 
     beside = write_manifest(tmp_path, {**MANIFEST, "product": "Image copy"})
     root_dir = tmp_path / "root"
@@ -89,7 +89,7 @@ def test_manifest_beside_the_module_wins_over_the_repo_root(tmp_path: Path, monk
     root = root_dir / "manifest.json"
     root.write_text(json.dumps({**MANIFEST, "product": "Repo root"}))
 
-    monkeypatch.setattr(node_info, "MANIFEST_PATHS", (beside, root))
+    monkeypatch.setattr(device_info, "MANIFEST_PATHS", (beside, root))
     assert json.loads(build_info("v1", None))["product"] == "Image copy"
 
     beside.unlink()  # a checkout run has no copy beside the module
@@ -97,10 +97,10 @@ def test_manifest_beside_the_module_wins_over_the_repo_root(tmp_path: Path, monk
 
 
 def test_production_lookup_prefers_the_copy_beside_the_module() -> None:
-    import node_tank.node_info as node_info
+    import driver_tank.device_info as device_info
 
-    package_dir = Path(node_info.__file__).resolve().parent
-    assert node_info.MANIFEST_PATHS == (
+    package_dir = Path(device_info.__file__).resolve().parent
+    assert device_info.MANIFEST_PATHS == (
         package_dir / "manifest.json",  # copied in by the image build
         package_dir.parent / "manifest.json",  # repo root, for a checkout run
     )

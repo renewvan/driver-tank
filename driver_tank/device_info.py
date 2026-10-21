@@ -1,8 +1,8 @@
-"""Node info: manifest.json + stamped version + Host serial, serialised for the bus.
+"""Device info: manifest.json + stamped version + Board serial, serialised for the bus.
 
-Copied (not imported) into every renewvan Python node repo; see hub
+Copied (not imported) into every renewvan Python device repo; see hub
 docs/adr/0011-node-manifest-and-retained-info-topic.md for why there is no
-shared package. Contract: hub `schema/node-info.schema.json`.
+shared package. Contract: hub `schema/device-info.schema.json`.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from pathlib import Path
 CPUINFO_PATH = Path("/proc/cpuinfo")
 
 
-def read_host_serial(cpuinfo_path: Path = CPUINFO_PATH) -> str | None:
-    """The `Serial` line of the host's /proc/cpuinfo; None when unreadable, empty or all zeros.
+def read_board_serial(cpuinfo_path: Path = CPUINFO_PATH) -> str | None:
+    """The `Serial` line of the board's /proc/cpuinfo; None when unreadable, empty or all zeros.
 
     Never a placeholder: an all-zero serial would make every Pi with a failing
     kernel look identical.
@@ -42,11 +42,11 @@ def _find_manifest() -> Path:
 
 
 def build_info(
-    version: str | None, host_serial: str | None, manifest_path: Path | None = None
+    version: str | None, board_serial: str | None, manifest_path: Path | None = None
 ) -> str:
-    """Node info JSON: manifest fields, `version` (or `dev`), `host_serial` when known."""
+    """Device info JSON: manifest fields, `version` (or `dev`), `board_serial` when known."""
     info = json.loads((manifest_path or _find_manifest()).read_text())
     info["version"] = version or "dev"
-    if host_serial:
-        info["host_serial"] = host_serial
+    if board_serial:
+        info["board_serial"] = board_serial
     return json.dumps(info)
