@@ -1,45 +1,40 @@
 name: Release
 
+# Start a release from the Actions tab or `gh workflow run release.yml -f bump=minor`.
+# The process lives in renewvan/hub (docs/adr/0015); this file only says what this repo ships.
 on:
-  release:
-    types: [created]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the latest release's version to increment
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: 'Explicit version (e.g. 0.2.0 or 0.2.0-beta.1); overrides "bump"'
+        type: string
+        required: false
+      prerelease:
+        description: 'Pre-release (a beta from a feature branch): tests gate it, `main` and `:latest` stay untouched'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  publish-image:
-    runs-on: ubuntu-latest
+  release:
     permissions:
-      contents: read
+      contents: write
       packages: write
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Run tests
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-test.txt
-          pytest tests/ -v --tb=short
-
-      - name: Log in to registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          build-args: |
-            DEVICE_VERSION=${{ github.event.release.tag_name }}
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/driver-tank:${{ github.event.release.tag_name }}
-            ghcr.io/${{ github.repository_owner }}/driver-tank:latest
+    uses: renewvan/hub/.github/workflows/release.yml@51af8a3e8bb644368be08883938c5043a550b4d9
+    with:
+      kind: image
+      image: driver-tank
+      device-version-arg: true
+      bump: ${{ inputs.bump }}
+      version: ${{ inputs.version }}
+      prerelease: ${{ inputs.prerelease }}
+      python-version: "3.12"
+      test-command: pip install -r requirements.txt -r requirements-test.txt && pytest tests/ -v --tb=short
