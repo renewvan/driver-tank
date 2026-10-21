@@ -28,13 +28,13 @@ jobs:
     permissions:
       contents: write
       packages: write
-    uses: renewvan/hub/.github/workflows/release.yml@51af8a3e8bb644368be08883938c5043a550b4d9
+    uses: renewvan/hub/.github/workflows/release.yml@eb9ad8a4b29519bbbd1c33b1092cdb7719628ec9
     with:
       kind: image
       image: driver-tank
       device-version-arg: true
+      python-version: "3.12"
+      test-command: pip install -r requirements.txt -r requirements-test.txt && pytest tests/ -v --tb=short
       bump: ${{ inputs.bump }}
       version: ${{ inputs.version }}
       prerelease: ${{ inputs.prerelease }}
-      python-version: "3.12"
-      test-command: pip install -r requirements.txt -r requirements-test.txt && pytest tests/ -v --tb=short

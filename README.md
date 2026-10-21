@@ -192,10 +192,18 @@ MQTT broker or ADS1115 hardware required.
 
 ## Releasing
 
-Tagging a GitHub release builds and publishes
-`ghcr.io/<owner>/driver-tank:<tag>`, which `hub`'s deployment compose
+Start a release from **Actions → Release → Run workflow**, or
+`gh workflow run release.yml -f bump=minor` (`patch`, `major`, or `-f version=0.2.0`
+to set it explicitly). One run works out the next version from the latest `v*` tag,
+tags `main`, creates the GitHub release and builds and publishes
+`ghcr.io/<owner>/driver-tank:<tag>` (and `:latest`), which `hub`'s deployment compose
 file pins by tag (never builds from source — see
 `hub/docs/adr/0001-compose-services-via-pinned-images-not-git-submodules.md`).
+
+A beta from a feature branch: dispatch the workflow on that branch with **prerelease**
+ticked. It runs the tests, publishes only its own tag (never `:latest`) and writes nothing
+to `main`. The process is shared by every renewvan repo and lives in `hub` (`hub/docs/adr/0015-one-release-process-via-reusable-workflows.md`);
+this repo's `release.yml` only says what it ships.
 
 The release workflow passes the tag as the `DEVICE_VERSION` build argument, which
 the Dockerfile promotes to an environment variable the device reads (see
@@ -230,10 +238,10 @@ unreadable, the line is missing or empty, or the value is all zeros.
 Python device repo rather than shared as a package, so each device releases
 independently.
 
-**CI gate:** `.github/workflows/manifest.yml` validates `manifest.json`
-against `device-manifest.schema.json`, fetched from `hub` at a **pinned commit**
-(`HUB_REF`) with `ajv-cli`, and fails if a manifest containing `version` is
-accepted. Bump `HUB_REF` deliberately to adopt a newer contract. To check
+**CI gate:** `.github/workflows/manifest.yml` calls hub's reusable manifest workflow,
+which validates `manifest.json` against `device-manifest.schema.json` at a **pinned hub
+commit** (`hub-ref`, the same SHA the workflow is pinned with) and fails if a manifest
+containing `version` is accepted. Bump both together to adopt a newer contract. To check
 locally:
 
 ```bash

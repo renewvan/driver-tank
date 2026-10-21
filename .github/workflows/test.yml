@@ -8,4 +8,4 @@ on:
 
 jobs:
   test:
-    uses: renewvan/hub/.github/workflows/python-test.yml@51af8a3e8bb644368be08883938c5043a550b4d9
+    uses: renewvan/hub/.github/workflows/python-test.yml@eb9ad8a4b29519bbbd1c33b1092cdb7719628ec9
