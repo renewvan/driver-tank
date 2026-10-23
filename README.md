@@ -1,15 +1,15 @@
 # driver-tank
 
-Native MQTT device for ADS1115-based resistive tank senders (fresh/grey
+Native MQTT driver for ADS1115-based resistive tank senders (fresh/grey
 water). Ported from Victron's `dbus-ads1115` Venus OS driver per
-`hub/docs/porting-dbus-to-mqtt-device.md`: keeps the voltage → resistance
+`hub/docs/porting-dbus-to-mqtt-driver.md`: keeps the voltage → resistance
 → percentage calibration math and layered config pattern, drops every
 D-Bus/Venus-OS/GUI layer. Calibration is config-file only.
 
-This repo is also the reference shape for other `driver-*` repos in the **renewvan** ecosystem (per the **Device** term in
+This repo is also the reference shape for other `driver-*` repos in the **renewvan** ecosystem (per the **Driver** term in
 `hub/docs/architecture.md`'s Terminology section: "anything that
 publishes one specific device or feed onto the renewvan bus, normalized
-into the device model"). A new device repo should follow the same layout:
+into the device model"). A new driver repo should follow the same layout:
 pure, unit-testable conversion math with no I/O (`calibration.py`), a
 layered `config.default.ini`/`config.ini` loader (`config.py`), a
 persistent MQTT publisher with LWT (`publisher.py`), a thin publish
@@ -21,6 +21,7 @@ publishing a versioned image.
 Retained, under `renewvan/tank/<fresh|grey>/`:
 
 **Identity fields** (published once at startup):
+- `driver` — string, the key of the Driver that publishes this tank: always `"tank"` (the `renewvan/tank/info` key). Lets a consumer attribute the instance to this Driver instead of guessing from `publishes`. Tank has no `name` property.
 - `fluid_type` — string (e.g., `fresh_water`, `grey_water`)
 - `capacity_l` — number, liters (canonical unit; configured via `tank_capacity` + `volume_unit`)
 - `alarm_direction` — `low` / `high` (optional, only if alarm is configured per tank)
@@ -35,13 +36,13 @@ Retained, under `renewvan/tank/<fresh|grey>/`:
 - `temperature_c` — number, degrees Celsius (optional, only if an NTC temp channel is configured per tank)
 
 **Command topics** (unretained, for external control):
-- `renewvan/tank/<id>/last_inspected_at/set` — payload: JSON string, ISO-8601 timestamp (e.g., `"2026-09-29T14:32:05-04:00"`) or bare `YYYY-MM-DD` (e.g., `"2026-09-29"`, normalized to local midnight); device validates and republishes to state topic on success
+- `renewvan/tank/<id>/last_inspected_at/set` — payload: JSON string, ISO-8601 timestamp (e.g., `"2026-09-29T14:32:05-04:00"`) or bare `YYYY-MM-DD` (e.g., `"2026-09-29"`, normalized to local midnight); driver validates and republishes to state topic on success
 
-**Device liveness** (not tank-keyed):
-- `renewvan/tank/health` — `online`/`offline` via MQTT LWT — deliberately 3 segments, not 4, so it can't be mistaken for a `tank` entity keyed by a fake `health`/`device` id
-- `renewvan/tank/info` — one retained JSON message describing this Device (see [Device info](#device-info)). Published on **every connect, immediately before `online`**, so a consumer that sees `online` always finds info already retained. It is **never cleared**: it stays retained when the device goes offline or its last will fires, which is what lets a consumer say "offline, last seen vX".
+**Driver liveness** (not tank-keyed):
+- `renewvan/tank/health` — `online`/`offline` via MQTT LWT — deliberately 3 segments, not 4, so it can't be mistaken for a `tank` entity keyed by a fake `health`/`driver` id
+- `renewvan/tank/info` — one retained JSON message describing this Driver (see [Driver info](#driver-info)). Published on **every connect, immediately before `online`**, so a consumer that sees `online` always finds info already retained. It is **never cleared**: it stays retained when the driver goes offline or its last will fires, which is what lets a consumer say "offline, last seen vX".
 
-Payload shapes match `hub`'s `schema/tank.schema.json` for entities and `hub`'s `schema/device-info.schema.json` for info.
+Payload shapes match `hub`'s `schema/tank.schema.json` for entities and `hub`'s `schema/driver-info.schema.json` for info.
 
 ## Wiring
 
@@ -136,7 +137,7 @@ temp_channel = 2
 ; temp_ntc_thermistor_low_side = true
 ```
 
-Restart the device; it publishes `temperature_c` live (same interval as `level_pct`), converted via the beta equation `1/T = 1/T₀ + (1/B)·ln(R/R₀)`.
+Restart the driver; it publishes `temperature_c` live (same interval as `level_pct`), converted via the beta equation `1/T = 1/T₀ + (1/B)·ln(R/R₀)`.
 
 Omit `temp_channel` to disable temperature sensing for a tank. An open thermistor (reads >10× nominal) or short (<nominal/20) is logged as a warning and skips the publish — the tank's `status` field stays level-sender health only.
 
@@ -205,27 +206,27 @@ ticked. It runs the tests, publishes only its own tag (never `:latest`) and writ
 to `main`. The process is shared by every renewvan repo and lives in `hub` (`hub/docs/adr/0015-one-release-process-via-reusable-workflows.md`);
 this repo's `release.yml` only says what it ships.
 
-The release workflow passes the tag as the `DEVICE_VERSION` build argument, which
-the Dockerfile promotes to an environment variable the device reads (see
-[Device info](#device-info)). Nothing else carries a version.
+The release workflow passes the tag as the `DRIVER_VERSION` build argument, which
+the Dockerfile promotes to an environment variable the driver reads (see
+[Driver info](#driver-info)). Nothing else carries a version.
 
-## Device info
+## Driver info
 
-The device describes itself to the dashboard with a manifest plus two runtime
-values. Contract: `hub`'s `schema/device-info.schema.json` (decision record:
+The driver describes itself to the dashboard with a manifest plus two runtime
+values. Contract: `hub`'s `schema/driver-info.schema.json` (decision record:
 `hub/docs/adr/0011-node-manifest-and-retained-info-topic.md`).
 
 **`manifest.json`** (repo root) is the single source of the static fields:
-`device` (`tank`, the topic key), `product`, `source`, `publishes`, and
+`driver` (`tank`, the topic key), `product`, `source`, `publishes`, and
 optional `manufacturer` / `homepage`. `version` and `board_serial` are
 **forbidden** in it. The image build copies it beside the module
-(`driver_tank/manifest.json`); the device reads that copy first and falls back
+(`driver_tank/manifest.json`); the driver reads that copy first and falls back
 to the repo-root file for a checkout run.
 
 **`version`** comes from the git release tag and nowhere else. The release
-workflow passes it as the `DEVICE_VERSION` build argument, which becomes an
-environment variable the device reads. When `DEVICE_VERSION` is unset or empty (a
-checkout run, a local `docker build`) the device reports the literal **`dev`**.
+workflow passes it as the `DRIVER_VERSION` build argument, which becomes an
+environment variable the driver reads. When `DRIVER_VERSION` is unset or empty (a
+checkout run, a local `docker build`) the driver reports the literal **`dev`**.
 There is no `version` file or `__version__`, and the `pyproject.toml` version
 is a fixed placeholder nothing reads.
 
@@ -234,17 +235,17 @@ at start. A default container can read it, so no compose or Dockerfile change
 is needed. It is **omitted** (never faked, never `unknown`) when the file is
 unreadable, the line is missing or empty, or the value is all zeros.
 
-`driver_tank/device_info.py` is a small helper deliberately **copied** into each
-Python device repo rather than shared as a package, so each device releases
+`driver_tank/driver_info.py` is a small helper deliberately **copied** into each
+Python driver repo rather than shared as a package, so each driver releases
 independently.
 
 **CI gate:** `.github/workflows/manifest.yml` calls hub's reusable manifest workflow,
-which validates `manifest.json` against `device-manifest.schema.json` at a **pinned hub
+which validates `manifest.json` against `driver-manifest.schema.json` at a **pinned hub
 commit** (`hub-ref`, the same SHA the workflow is pinned with) and fails if a manifest
 containing `version` is accepted. Bump both together to adopt a newer contract. To check
 locally:
 
 ```bash
-npx --yes ajv-cli@5 validate -s path/to/hub/schema/device-manifest.schema.json -d manifest.json
+npx --yes ajv-cli@5 validate -s path/to/hub/schema/driver-manifest.schema.json -d manifest.json
 ```
 

@@ -1,8 +1,8 @@
 """Persistent MQTT connection with LWT and a retained-topic publish helper.
 
-Per docs/porting-dbus-to-mqtt-device.md: connect with retry/backoff, an
-LWT on a status topic so downstream consumers can detect a dead device,
-and a long-lived connection (this device is the source of truth, not a
+Per docs/porting-dbus-to-mqtt-driver.md: connect with retry/backoff, an
+LWT on a status topic so downstream consumers can detect a dead driver,
+and a long-lived connection (this driver is the source of truth, not a
 re-publisher).
 
 Ticket 06: Added subscription support for command topics (last_inspected_at/set).

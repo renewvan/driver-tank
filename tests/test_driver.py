@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from driver_tank.calibration import Calibration
 from driver_tank.config import TankConfig
+from driver_tank.publisher import INFO_TOPIC
 from driver_tank.driver import (
     FullEmptyState,
     TankState,
@@ -480,7 +481,7 @@ def test_unconfigured_temp_channel_publishes_nothing_temperature(monkeypatch):
     assert "renewvan/tank/fresh/temperature_c" not in dict(publisher.published)
 
 
-def test_run_stamps_device_version_env_into_published_info(monkeypatch) -> None:
+def test_run_stamps_driver_version_env_into_published_info(monkeypatch) -> None:
     import driver_tank.driver as driver
     from driver_tank.config import load_config
 
@@ -504,11 +505,38 @@ def test_run_stamps_device_version_env_into_published_info(monkeypatch) -> None:
 
     for env, expected in (("v4.5.6", "v4.5.6"), (None, "dev")):
         if env is None:
-            monkeypatch.delenv("DEVICE_VERSION", raising=False)
+            monkeypatch.delenv("DRIVER_VERSION", raising=False)
         else:
-            monkeypatch.setenv("DEVICE_VERSION", env)
+            monkeypatch.setenv("DRIVER_VERSION", env)
         try:
             driver.run(config)
         except StopRun:
             pass
         assert json.loads(captured["info"])["version"] == expected
+
+
+# --- driver attribution (renewvan/tank/<id>/driver) ------------------------
+
+
+def test_publish_identity_names_the_owning_driver_for_every_tank():
+    import driver_tank.driver as driver_mod
+    from dataclasses import replace
+
+    publisher = _FakePublisher()
+    for tank_id in ("fresh", "grey"):
+        driver_mod.publish_identity(publisher, replace(make_tank(), id=tank_id), TankState())
+
+    published = dict(publisher.published)
+    assert json.loads(published["renewvan/tank/fresh/driver"]) == "tank"
+    assert json.loads(published["renewvan/tank/grey/driver"]) == "tank"
+    # Tank has no `name` property on the wire; only `driver` is added.
+    assert "renewvan/tank/fresh/name" not in published
+
+
+def test_driver_key_matches_manifest_and_info_topic():
+    import driver_tank.driver as driver_mod
+    from pathlib import Path
+
+    manifest = json.loads((Path(driver_mod.__file__).parent.parent / "manifest.json").read_text())
+    assert manifest["driver"] == driver_mod.DRIVER_KEY
+    assert INFO_TOPIC == f"renewvan/{driver_mod.DRIVER_KEY}/info"

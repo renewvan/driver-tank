@@ -1,5 +1,5 @@
 [Unit]
-Description=driver-tank MQTT device
+Description=driver-tank MQTT driver
 After=network-online.target
 Wants=network-online.target
 

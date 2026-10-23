@@ -1,15 +1,15 @@
 import json
 from pathlib import Path
 
-from driver_tank.device_info import build_info, read_board_serial
+from driver_tank.driver_info import build_info, read_board_serial
 
 MANIFEST = {
-    "device": "tank",
+    "driver": "tank",
     "product": "Test product",
     "source": "Test source",
     "publishes": ["tank"],
     "manufacturer": "Acme",
-    "homepage": "https://example.com/device",
+    "homepage": "https://example.com/driver",
 }
 
 
@@ -81,7 +81,7 @@ def test_default_manifest_is_the_repo_root_file_in_a_checkout() -> None:
 
 
 def test_manifest_beside_the_module_wins_over_the_repo_root(tmp_path: Path, monkeypatch) -> None:
-    import driver_tank.device_info as device_info
+    import driver_tank.driver_info as driver_info
 
     beside = write_manifest(tmp_path, {**MANIFEST, "product": "Image copy"})
     root_dir = tmp_path / "root"
@@ -89,7 +89,7 @@ def test_manifest_beside_the_module_wins_over_the_repo_root(tmp_path: Path, monk
     root = root_dir / "manifest.json"
     root.write_text(json.dumps({**MANIFEST, "product": "Repo root"}))
 
-    monkeypatch.setattr(device_info, "MANIFEST_PATHS", (beside, root))
+    monkeypatch.setattr(driver_info, "MANIFEST_PATHS", (beside, root))
     assert json.loads(build_info("v1", None))["product"] == "Image copy"
 
     beside.unlink()  # a checkout run has no copy beside the module
@@ -97,10 +97,10 @@ def test_manifest_beside_the_module_wins_over_the_repo_root(tmp_path: Path, monk
 
 
 def test_production_lookup_prefers_the_copy_beside_the_module() -> None:
-    import driver_tank.device_info as device_info
+    import driver_tank.driver_info as driver_info
 
-    package_dir = Path(device_info.__file__).resolve().parent
-    assert device_info.MANIFEST_PATHS == (
+    package_dir = Path(driver_info.__file__).resolve().parent
+    assert driver_info.MANIFEST_PATHS == (
         package_dir / "manifest.json",  # copied in by the image build
         package_dir.parent / "manifest.json",  # repo root, for a checkout run
     )

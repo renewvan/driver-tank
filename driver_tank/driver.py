@@ -1,7 +1,7 @@
 """Publish loop: ADC read -> calibration math -> renewvan/tank/<id>/<property>.
 
 Field/topic shape per hub's schema/tank.schema.json and
-docs/porting-dbus-to-mqtt-device.md: fluid_type/capacity_l published
+docs/porting-dbus-to-mqtt-driver.md: fluid_type/capacity_l published
 retained at startup (identity fields, rarely change), level_pct/status
 republished retained on every read (live fields).
 
@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 
 from driver_tank.adc import ADS1115
 from driver_tank.config import AppConfig, TankConfig
-from driver_tank.device_info import build_info, read_board_serial
+from driver_tank.driver_info import build_info, read_board_serial
 from driver_tank.publisher import Publisher
 
 logger = logging.getLogger(__name__)
@@ -93,6 +93,11 @@ class TankState:
     # anchor), and the derived field publishes 0 until the next commit.
     level_pct_at_full_commit: float | None = None
     level_pct_at_empty_commit: float | None = None
+
+
+# This Driver's key: repo name minus `driver-`; equals manifest.json `driver` and the
+# `renewvan/tank/info` topic segment.
+DRIVER_KEY = "tank"
 
 
 def _topic(tank_id: str, prop: str) -> str:
@@ -230,11 +235,13 @@ def publish_identity(publisher: Publisher, tank: TankConfig, tank_state: TankSta
     """Publish identity fields at startup (ticket 01, 06; hub schema v0.5 alarm config fields).
 
     Identity fields (retained, published once at startup):
+    - driver (always): the key of this Driver, so consumers can attribute the instance
     - fluid_type, capacity_l (always)
     - alarm_direction, alarm_threshold_pct, alarm_restore_pct (only if alarm is configured --
       same condition as alarm_state's live publication)
     - last_inspected_at, last_full_at, last_empty_at (only if loaded from state file)
     """
+    publisher.publish(_topic(tank.id, "driver"), json.dumps(DRIVER_KEY))
     publisher.publish(_topic(tank.id, "fluid_type"), json.dumps(tank.fluid_type))
     publisher.publish(_topic(tank.id, "capacity_l"), json.dumps(tank.capacity_l))
 
@@ -562,9 +569,9 @@ def run(config: AppConfig) -> None:
     """Main publish loop (ticket 01, 02, 05, 06; flow-rate-full-empty-telemetry ticket 01, 02)."""
     _ensure_state_dir()
 
-    # Version is stamped by the release build (DEVICE_VERSION); unset reports "dev".
+    # Version is stamped by the release build (DRIVER_VERSION); unset reports "dev".
     # Board serial is read once, here, at process start.
-    info = build_info(os.environ.get("DEVICE_VERSION"), read_board_serial())
+    info = build_info(os.environ.get("DRIVER_VERSION"), read_board_serial())
     publisher = Publisher(config.mqtt, info)
     publisher.connect()
     adc = ADS1115(bus_number=config.i2c_bus, address=config.i2c_address)
