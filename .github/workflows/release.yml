@@ -28,11 +28,11 @@ jobs:
     permissions:
       contents: write
       packages: write
-    uses: renewvan/hub/.github/workflows/release.yml@eb9ad8a4b29519bbbd1c33b1092cdb7719628ec9
+    uses: renewvan/hub/.github/workflows/release.yml@a1139b7c9a643427632d7cea5105d4e39079b1d9
     with:
       kind: image
       image: driver-tank
-      device-version-arg: true
+      driver-version-arg: true
       python-version: "3.12"
       test-command: pip install -r requirements.txt -r requirements-test.txt && pytest tests/ -v --tb=short
       bump: ${{ inputs.bump }}

@@ -4,7 +4,7 @@ import driver_tank.publisher as publisher_module
 from driver_tank.config import load_config
 from driver_tank.publisher import HEALTH_TOPIC, INFO_TOPIC, Publisher
 
-INFO = '{"device": "tank", "version": "v1"}'
+INFO = '{"driver": "tank", "version": "v1"}'
 
 
 class FakeClient:
@@ -57,7 +57,7 @@ def test_failed_connect_publishes_nothing(publisher: Publisher) -> None:
     assert client.published == []
 
 
-def test_info_is_never_cleared_when_the_device_goes_offline(publisher: Publisher) -> None:
+def test_info_is_never_cleared_when_the_driver_goes_offline(publisher: Publisher) -> None:
     client = connect(publisher)
     client.published.clear()
     publisher.disconnect()

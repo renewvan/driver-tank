@@ -1,4 +1,4 @@
-# Device Tank Telemetry
+# Driver Tank Telemetry
 
 Domain glossary for `driver-tank`'s per-tank sensor telemetry: what each
 published field *means*, independent of the Python that computes it.
@@ -29,7 +29,7 @@ tank-role-agnostic; the dashboard decides what "consumed" vs.
 a full instant (ISO-8601 with local UTC offset) — when precision or
 auto-detection is involved. `_date` is reserved for genuine
 calendar-date-only concepts with no time component. Every timestamp
-field in this device's schema uses `_at`; none currently use `_date`.
+field in this driver's schema uses `_at`; none currently use `_date`.
 _Avoid_: Using `_date` for anything that isn't calendar-date-only —
 it silently collapses same-day repeat events into one indistinguishable
 value.

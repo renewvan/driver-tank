@@ -9,6 +9,6 @@ on:
 jobs:
   manifest:
     # Same hub commit for the workflow and the schema it checks: bump both together.
-    uses: renewvan/hub/.github/workflows/manifest.yml@eb9ad8a4b29519bbbd1c33b1092cdb7719628ec9
+    uses: renewvan/hub/.github/workflows/manifest.yml@a1139b7c9a643427632d7cea5105d4e39079b1d9
     with:
-      hub-ref: eb9ad8a4b29519bbbd1c33b1092cdb7719628ec9
+      hub-ref: a1139b7c9a643427632d7cea5105d4e39079b1d9
