@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: write
       packages: write
-    uses: renewvan/hub/.github/workflows/release.yml@eb9ad8a4b29519bbbd1c33b1092cdb7719628ec9
+    uses: renewvan/hub/.github/workflows/release.yml@dae1ea89efabae05a2009699d2899248658d08e7
     with:
       kind: image
       image: driver-tank
