@@ -6,7 +6,7 @@ water). Ported from Victron's `dbus-ads1115` Venus OS driver per
 → percentage calibration math and layered config pattern, drops every
 D-Bus/Venus-OS/GUI layer. Calibration is config-file only.
 
-This repo is also the reference shape for other `driver-*` repos in the **renewvan** ecosystem (per the **Driver** term in
+New `driver-*` repos start from [`renewvan/driver-template`](https://github.com/renewvan/driver-template); this repo is a real device built to the same layout (per the **Driver** term in
 `hub/docs/architecture.md`'s Terminology section: "anything that
 publishes one specific device or feed onto the renewvan bus, normalized
 into the device model"). A new driver repo should follow the same layout:
