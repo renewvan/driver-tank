@@ -1,9 +1,6 @@
 """Voltage -> resistance -> tank-level-percentage conversion math.
 
-Ported near-verbatim from dbus-ads1115's TankSensor domain logic
-(see /Users/alejandrosanchezbautista/Projects/VenusOS/dbus-ads1115/dbus_ads1115/sensors.py),
-stripped of every D-Bus/Venus-OS/settings concern. Pure functions and a
-small stateless Calibration value object: no MQTT, no I/O, no hardware
+Pure functions and a small stateless Calibration value object: no MQTT, no I/O, no hardware
 access — safe to unit test with fixture voltages only.
 """
 
@@ -32,8 +29,7 @@ class ShapePoint:
 def parse_shape(value: str) -> list[ShapePoint]:
     """Parse a "10:5,50:40,80:90" shape string into sorted ShapePoints.
 
-    Same wire format dbus-ads1115 used for its /Shape D-Bus path. 0% and
-    100% are implicit and never stored. Returns [] if value is falsy or
+    0% and 100% are implicit and never stored. Returns [] if value is falsy or
     malformed (falls back to a linear tank shape).
     """
     if not value:

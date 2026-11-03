@@ -1,10 +1,8 @@
 # driver-tank
 
 Native MQTT driver for ADS1115-based resistive tank senders (fresh/grey
-water). Ported from Victron's `dbus-ads1115` Venus OS driver per
-`hub/docs/porting-dbus-to-mqtt-driver.md`: keeps the voltage → resistance
-→ percentage calibration math and layered config pattern, drops every
-D-Bus/Venus-OS/GUI layer. Calibration is config-file only.
+water). Converts voltage → resistance → percentage with a layered config
+pattern. Calibration is config-file only.
 
 New `driver-*` repos start from [`renewvan/driver-template`](https://github.com/renewvan/driver-template); this repo is a real device built to the same layout (per the **Driver** term in
 `hub/docs/architecture.md`'s Terminology section: "anything that
