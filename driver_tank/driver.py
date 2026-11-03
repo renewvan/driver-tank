@@ -1,7 +1,7 @@
 """Publish loop: ADC read -> calibration math -> renewvan/tank/<id>/<property>.
 
 Field/topic shape per hub's schema/tank.schema.json and
-docs/porting-dbus-to-mqtt-driver.md: fluid_type/capacity_l published
+docs/authoring-a-driver.md: fluid_type/capacity_l published
 retained at startup (identity fields, rarely change), level_pct/status
 republished retained on every read (live fields).
 

@@ -1,6 +1,6 @@
 """Persistent MQTT connection with LWT and a retained-topic publish helper.
 
-Per docs/porting-dbus-to-mqtt-driver.md: connect with retry/backoff, an
+Per hub docs/authoring-a-driver.md: connect with retry/backoff, an
 LWT on a status topic so downstream consumers can detect a dead driver,
 and a long-lived connection (this driver is the source of truth, not a
 re-publisher).

@@ -1,7 +1,6 @@
 """Layered INI config: config.default.ini (shipped) + config.ini (local override).
 
-Same pattern as dbus-ads1115 (and dbus-serialbattery before it): the
-default file ships every key with a safe value and is never edited in
+The default file ships every key with a safe value and is never edited in
 place; config.ini is gitignored, holds only the keys a given install
 needs to override, and survives upgrades.
 """
