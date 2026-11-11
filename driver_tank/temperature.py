@@ -18,8 +18,6 @@ Divider orientation is config-driven because installs differ:
 Failure classification mirrors calibration.py's resistance -> status
 pattern: R > 10x nominal -> open circuit, R < nominal/20 -> short
 circuit. Both raise ValueError; the caller warns and skips the publish.
-
-Research: hub repo, .scratch/ntc-temperature-sensor/issues/01-ntc-reading-math.md
 """
 
 from __future__ import annotations
