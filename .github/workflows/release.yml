@@ -1,4 +1,5 @@
 name: Release
+run-name: Release ${{ inputs.version && (startsWith(inputs.version, 'v') && inputs.version || format('v{0}', inputs.version)) || format('{0} bump', inputs.bump) }}${{ inputs.prerelease && ' (pre-release)' || '' }}
 
 # Start a release from the Actions tab or `gh workflow run release.yml -f bump=minor`.
 # The process lives in renewvan/hub (docs/adr/0015); this file only says what this repo ships.
