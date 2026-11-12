@@ -3,3 +3,6 @@
 .pytest_cache/
 /config.ini
 /state/
+
+# Local scratch notes; never committed
+.scratch/
