@@ -6,7 +6,7 @@ pattern. Calibration is config-file only.
 
 New `driver-*` repos start from [`renewvan/driver-template`](https://github.com/renewvan/driver-template); this repo is a real device built to the same layout (per the **Driver** term in
 `hub/docs/architecture.md`'s Terminology section: "anything that
-publishes one specific device or feed onto the renewvan bus, normalized
+publishes one specific device or feed onto the Renewvan bus, normalized
 into the device model"). A new driver repo should follow the same layout:
 pure, unit-testable conversion math with no I/O (`calibration.py`), a
 layered `config.default.ini`/`config.ini` loader (`config.py`), a
@@ -201,7 +201,7 @@ file pins by tag (never builds from source — see
 
 A beta from a feature branch: dispatch the workflow on that branch with **prerelease**
 ticked. It runs the tests, publishes only its own tag (never `:latest`) and writes nothing
-to `main`. The process is shared by every renewvan repo and lives in `hub` (`hub/docs/adr/0015-one-release-process-via-reusable-workflows.md`);
+to `main`. The process is shared by every Renewvan repo and lives in `hub` (`hub/docs/adr/0015-one-release-process-via-reusable-workflows.md`);
 this repo's `release.yml` only says what it ships.
 
 The release workflow passes the tag as the `DRIVER_VERSION` build argument, which
