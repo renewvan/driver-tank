@@ -11,3 +11,5 @@ Default five canonical roles (`needs-triage`, `needs-info`, `ready-for-agent`, `
 ### Domain docs
 
 Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+- Write the product name "Renewvan" in prose and UI text, never "renewvan" or "RenewVan"; lowercase `renewvan` stays only in identifiers (topics, URLs, bucket, host, bundle IDs). See "Brand spelling" in `hub/CONTEXT.md`.
