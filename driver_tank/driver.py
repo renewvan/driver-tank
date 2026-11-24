@@ -37,8 +37,10 @@ from pathlib import Path
 from dataclasses import dataclass, field
 
 from driver_tank.adc import ADS1115
+from driver_tank.calibration import Status
 from driver_tank.config import AppConfig, TankConfig
 from driver_tank.driver_info import build_info, read_board_serial
+from driver_tank.excitation import Excitation, GpioExcitation, NoExcitation
 from driver_tank.publisher import Publisher
 
 logger = logging.getLogger(__name__)
@@ -93,6 +95,9 @@ class TankState:
     # anchor), and the derived field publishes 0 until the next commit.
     level_pct_at_full_commit: float | None = None
     level_pct_at_empty_commit: float | None = None
+    # Level probes (hub ADR 0033): last wet/dry per probe, for hysteresis. None = not
+    # read yet (all treated as dry).
+    probe_wet: list[bool] | None = None
 
 
 # This Driver's key: repo name minus `driver-`; equals manifest.json `driver` and the
@@ -240,10 +245,14 @@ def publish_identity(publisher: Publisher, tank: TankConfig, tank_state: TankSta
     - alarm_direction, alarm_threshold_pct, alarm_restore_pct (only if alarm is configured --
       same condition as alarm_state's live publication)
     - last_inspected_at, last_full_at, last_empty_at (only if loaded from state file)
+    - level_marks_pct (only for a Level probes tank, hub ADR 0033)
     """
     publisher.publish(_topic(tank.id, "driver"), json.dumps(DRIVER_KEY))
     publisher.publish(_topic(tank.id, "fluid_type"), json.dumps(tank.fluid_type))
     publisher.publish(_topic(tank.id, "capacity_l"), json.dumps(tank.capacity_l))
+    if tank.level_probes is not None:
+        marks = [round(m, 1) for m in tank.level_probes.marks_pct]
+        publisher.publish(_topic(tank.id, "level_marks_pct"), json.dumps(marks))
 
     if tank.alarm_direction is not None:
         publisher.publish(_topic(tank.id, "alarm_direction"), json.dumps(tank.alarm_direction))
@@ -383,8 +392,13 @@ def _compute_full_empty_state(
         now=now,
         delay_s=tank.alarm_delay_s,
     )
+    # A Stepped level of 0 only means "below the lowest probe": empty is certain only
+    # if that probe sits at or below the empty threshold (hub ADR 0033).
+    empty_certain = (
+        tank.level_probes is None or tank.level_probes.marks_pct[0] <= tank.empty_threshold_pct
+    )
     committed_empty, empty_latched, empty_delay_start = _compute_one_shot_latch(
-        in_band=level_pct <= tank.empty_threshold_pct,
+        in_band=empty_certain and level_pct <= tank.empty_threshold_pct,
         latched=full_empty_state.empty_latched,
         delay_start=full_empty_state.empty_delay_start,
         now=now,
@@ -439,12 +453,43 @@ def _compute_volume_since_latch(
     return _volume(level_pct_at_full_commit), _volume(level_pct_at_empty_commit)
 
 
+def _read_level_probes(
+    adc: ADS1115, tank: TankConfig, tank_state: TankState, excitation: Excitation
+) -> float:
+    """Read every probe with the excitation on, update wet/dry with hysteresis,
+    and return the Stepped level. Status is always ok for probes: a dry probe is
+    an open circuit by nature, and an impossible pattern is only logged."""
+    probes = tank.level_probes
+    excitation.on()
+    try:
+        if probes.excitation_gpio is not None:
+            time.sleep(probes.settle_ms / 1000.0)
+        voltages = [adc.read_voltage(p.channel, _PGA_DEFAULT) for p in probes.probes]
+    finally:
+        excitation.off()
+    previous = tank_state.probe_wet or [False] * len(voltages)
+    wet = [probes.is_wet(v, was) for v, was in zip(voltages, previous)]
+    tank_state.probe_wet = wet
+    level_pct, consistent = probes.stepped_level(wet)
+    if not consistent:
+        logger.warning(
+            "Tank %s: wet probe above a dry one (marks=%s wet=%s voltages=%s)",
+            tank.id,
+            probes.marks_pct,
+            wet,
+            [round(v, 3) for v in voltages],
+        )
+    logger.debug("tank=%s probe voltages=%s wet=%s", tank.id, voltages, wet)
+    return level_pct
+
+
 def read_and_publish(
     publisher: Publisher,
     adc: ADS1115,
     tank: TankConfig,
     tank_state: TankState,
     now: float,
+    excitation: Excitation | None = None,
 ) -> None:
     """Read sensors and publish live fields (ticket 01, 02, 05;
     volume-timestamp-telemetry ticket 02).
@@ -457,9 +502,14 @@ def read_and_publish(
     Identity fields republished only when they change:
     - last_full_at, last_empty_at (auto-detected on a sustained full/empty crossing)
     """
-    # Read level from ADS1115
-    voltage = adc.read_voltage(tank.channel, _PGA_DEFAULT)
-    level_pct, status = tank.calibration.read(voltage)
+    # Read level from ADS1115: a Sender's divider, or each Level probe (hub ADR 0033)
+    voltage: float | None = None
+    if tank.level_probes is not None:
+        level_pct = _read_level_probes(adc, tank, tank_state, excitation or NoExcitation())
+        status = Status.OK
+    else:
+        voltage = adc.read_voltage(tank.channel, _PGA_DEFAULT)
+        level_pct, status = tank.calibration.read(voltage)
     publisher.publish(_topic(tank.id, "level_pct"), json.dumps(round(level_pct, 1)))
     publisher.publish(_topic(tank.id, "status"), json.dumps(status.value))
 
@@ -495,9 +545,16 @@ def read_and_publish(
 
     # Compute and publish volume-since-latch -- unconditional live fields
     # (volume-timestamp-telemetry ticket 02)
-    volume_since_full_l, volume_since_empty_l = _compute_volume_since_latch(
-        tank, level_pct, tank_state.level_pct_at_full_commit, tank_state.level_pct_at_empty_commit
-    )
+    # Steps between Level marks are not a measured volume: always 0 (hub ADR 0033).
+    if tank.level_probes is not None:
+        volume_since_full_l = volume_since_empty_l = 0.0
+    else:
+        volume_since_full_l, volume_since_empty_l = _compute_volume_since_latch(
+            tank,
+            level_pct,
+            tank_state.level_pct_at_full_commit,
+            tank_state.level_pct_at_empty_commit,
+        )
     publisher.publish(
         _topic(tank.id, "volume_since_full_l"), json.dumps(round(volume_since_full_l, 2))
     )
@@ -515,9 +572,9 @@ def read_and_publish(
             logger.warning(f"Tank {tank.id}: Failed to read temperature: {e}")
 
     logger.info(
-        "tank=%s voltage=%.4fV level_pct=%.1f status=%s alarm=%s",
+        "tank=%s voltage=%s level_pct=%.1f status=%s alarm=%s",
         tank.id,
-        voltage,
+        f"{voltage:.4f}V" if voltage is not None else "probes",
         level_pct,
         status.value,
         new_alarm_state if tank.alarm_direction else "n/a",
@@ -575,6 +632,11 @@ def run(config: AppConfig) -> None:
     publisher = Publisher(config.mqtt, info)
     publisher.connect()
     adc = ADS1115(bus_number=config.i2c_bus, address=config.i2c_address)
+    excitations = {
+        tank.id: GpioExcitation(config.gpio_chip, tank.level_probes.excitation_gpio)
+        for tank in config.tanks
+        if tank.level_probes is not None and tank.level_probes.excitation_gpio is not None
+    }
 
     # Initialize tank state objects
     tank_states: dict[str, TankState] = {}
@@ -620,10 +682,14 @@ def run(config: AppConfig) -> None:
             now = time.time()
             for tank in config.tanks:
                 try:
-                    read_and_publish(publisher, adc, tank, tank_states[tank.id], now)
+                    read_and_publish(
+                        publisher, adc, tank, tank_states[tank.id], now, excitations.get(tank.id)
+                    )
                 except Exception:
                     logger.exception("Read failed for tank=%s", tank.id)
             time.sleep(min(t.update_interval_ms for t in config.tanks) / 1000.0)
     finally:
+        for excitation in excitations.values():
+            excitation.close()
         adc.close()
         publisher.disconnect()

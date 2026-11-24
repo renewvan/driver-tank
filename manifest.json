@@ -1,8 +1,10 @@
 {
   "driver": "tank",
-  "product": "ADS1115 resistive tank sender device",
+  "product": "ADS1115 tank level sensors (senders, level probes)",
   "source": "ADS1115 analog-to-digital converter over I2C",
-  "publishes": ["tank"],
+  "publishes": [
+    "tank"
+  ],
   "manufacturer": "renewvan",
   "homepage": "https://github.com/renewvan/driver-tank"
 }

@@ -3,11 +3,12 @@ name = "driver-tank"
 # Fixed placeholder: nothing reads this. The git release tag is the only version
 # source (stamped into the image as DRIVER_VERSION).
 version = "0.0.0"
-description = "Native MQTT driver for ADS1115-based resistive tank senders"
+description = "Native MQTT driver for ADS1115-based tank level sensors"
 requires-python = ">=3.11"
 dependencies = [
     "paho-mqtt>=1.6,<2",
     "smbus2>=0.4",
+    "gpiod>=2.2",
 ]
 
 [build-system]

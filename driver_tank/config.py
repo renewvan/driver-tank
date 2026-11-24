@@ -13,11 +13,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from driver_tank.calibration import Calibration, parse_shape
+from driver_tank.probes import LevelProbes, parse_probes
 from driver_tank.temperature import NTCConversion
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.default.ini"
+
+# Level sensor kinds (CONTEXT.md). Only senders and Level probes are read today.
+SENSOR_TYPES = ("sender", "voltage", "probes")
+# Keys that only make sense for a Sender: a probes tank that sets one locally is a
+# config mistake (defaults for the shipped [tank.*] sections are ignored).
+_SENDER_ONLY_KEYS = ("channel", "sensor_min", "sensor_max")
 
 # Volume unit conversion factors (ticket 03)
 # Convert from the configured unit to liters (canonical unit for publishing)
@@ -51,11 +58,11 @@ class MqttConfig:
 class TankConfig:
     id: str  # topic path segment, e.g. "fresh" / "grey"
     name: str
-    channel: int
+    channel: int | None  # Sender's ADS1115 channel; None for Level probes
     fluid_type: str
     capacity_l: float
     update_interval_ms: int
-    calibration: Calibration
+    calibration: Calibration | None  # Sender only; None for Level probes
     # Alarm configuration (ticket 02)
     alarm_direction: str | None  # "low" or "high", None if alarm disabled
     alarm_threshold: float | None  # level % that triggers alarm
@@ -68,6 +75,8 @@ class TankConfig:
     # renamed from *_date to *_at, volume-timestamp-telemetry ticket 01)
     full_threshold_pct: float  # in-band threshold for last_full_at (default 99)
     empty_threshold_pct: float  # in-band threshold for last_empty_at (default 1)
+    # Level probes (hub ADR 0033): set iff sensor_type = probes
+    level_probes: LevelProbes | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +85,7 @@ class AppConfig:
     i2c_address: int
     mqtt: MqttConfig
     tanks: list[TankConfig]
+    gpio_chip: str = "/dev/gpiochip0"  # for Level probes' excitation GPIO
 
 
 def _get_float(section: configparser.SectionProxy, key: str, default: float | None = None) -> float:
@@ -125,6 +135,48 @@ def _convert_tank_capacity_to_liters(section: configparser.SectionProxy) -> floa
     return raw_capacity * factor
 
 
+def _reject_sender_keys(section_name: str, local_only: configparser.ConfigParser) -> None:
+    """A probes tank must not set sender-only keys. Keys inherited from the
+    shipped defaults don't count (config.default.ini ships [tank.grey] as a
+    sender); only keys set in config.ini do. A section the defaults don't
+    ship lives wholly in config.ini, so its keys are all checked."""
+    explicit = set(local_only[section_name]) if local_only.has_section(section_name) else set()
+    conflicting = [k for k in _SENDER_ONLY_KEYS if k in explicit]
+    if conflicting:
+        raise ValueError(
+            f"Section {section_name}: sensor_type = probes cannot set sender-only "
+            f"key(s) {', '.join(conflicting)}"
+        )
+
+
+def _load_level_probes(
+    section: configparser.SectionProxy, reference_voltage: float, shape: list
+) -> LevelProbes:
+    if not section.get("probes", "").strip():
+        raise ValueError(f"Section {section.name}: sensor_type = probes needs a 'probes' key")
+    try:
+        probes = parse_probes(section.get("probes"), shape)
+    except ValueError as e:
+        raise ValueError(f"Section {section.name}: {e}") from None
+    fixed_resistor = _get_float(section, "fixed_resistor")
+    if fixed_resistor < 1000:
+        logger.warning(
+            "Tank %s: fixed_resistor %.0f ohm is low for Level probes; use 10k-100k ohm",
+            section.name,
+            fixed_resistor,
+        )
+    excitation_raw = section.get("probe_excitation_gpio", fallback=None)
+    return LevelProbes(
+        probes=probes,
+        fixed_resistor=fixed_resistor,
+        reference_voltage=reference_voltage,
+        wet_max_ohm=_get_float(section, "probe_wet_max_ohm", 100_000.0),
+        dry_min_ohm=_get_float(section, "probe_dry_min_ohm", 150_000.0),
+        excitation_gpio=int(excitation_raw) if excitation_raw else None,
+        settle_ms=_get_float(section, "probe_settle_ms", 5.0),
+    )
+
+
 def load_config(
     default_path: Path = DEFAULT_CONFIG_PATH, local_path: Path | None = None
 ) -> AppConfig:
@@ -136,6 +188,9 @@ def load_config(
     parsed = parser.read(read_files)
     if not parsed:
         raise FileNotFoundError(f"No config file found (looked for {default_path})")
+    local_only = configparser.ConfigParser()
+    if local_path is not None and local_path.exists():
+        local_only.read(str(local_path))
 
     i2c = parser["i2c"]
     mqtt_section = parser["mqtt"]
@@ -157,15 +212,33 @@ def load_config(
         if not section.getboolean("enabled", fallback=True):
             continue
         tank_id = section_name.split(".", 1)[1]
-        calibration = Calibration(
-            fixed_resistor=_get_float(section, "fixed_resistor"),
-            reference_voltage=_get_float(
-                section, "reference_voltage", i2c.getfloat("reference_voltage", 3.3)
-            ),
-            sensor_min=_get_float(section, "sensor_min"),
-            sensor_max=_get_float(section, "sensor_max"),
-            shape=parse_shape(section.get("shape", fallback="")),
+        reference_voltage = _get_float(
+            section, "reference_voltage", i2c.getfloat("reference_voltage", 3.3)
         )
+        shape = parse_shape(section.get("shape", fallback=""))
+        sensor_type = section.get("sensor_type", "sender").strip().lower()
+        calibration: Calibration | None = None
+        level_probes: LevelProbes | None = None
+        channel: int | None = None
+        if sensor_type == "sender":
+            channel = section.getint("channel")
+            calibration = Calibration(
+                fixed_resistor=_get_float(section, "fixed_resistor"),
+                reference_voltage=reference_voltage,
+                sensor_min=_get_float(section, "sensor_min"),
+                sensor_max=_get_float(section, "sensor_max"),
+                shape=shape,
+            )
+        elif sensor_type == "probes":
+            _reject_sender_keys(section_name, local_only)
+            level_probes = _load_level_probes(section, reference_voltage, shape)
+        elif sensor_type == "voltage":
+            raise ValueError(f"Section {section_name}: sensor_type 'voltage' is not supported yet")
+        else:
+            raise ValueError(
+                f"Section {section_name}: unknown sensor_type {sensor_type!r} "
+                f"(expected one of {', '.join(SENSOR_TYPES)})"
+            )
 
         # Volume-unit conversion (ticket 03)
         capacity_l = _convert_tank_capacity_to_liters(section)
@@ -197,6 +270,10 @@ def load_config(
             if temp_channel is not None
             else None
         )
+        if level_probes is not None and temp_channel in {p.channel for p in level_probes.probes}:
+            raise ValueError(
+                f"Section {section_name}: temp_channel {temp_channel} is also a probe channel"
+            )
 
         # Full/empty date tracking (flow-rate-full-empty-telemetry ticket 02)
         full_threshold_pct = _get_float(section, "full_threshold_pct", default=99.0)
@@ -206,7 +283,7 @@ def load_config(
             TankConfig(
                 id=tank_id,
                 name=section.get("name", tank_id),
-                channel=section.getint("channel"),
+                channel=channel,
                 fluid_type=section.get("fluid_type"),
                 capacity_l=capacity_l,
                 update_interval_ms=section.getint("update_interval_ms", 3000),
@@ -219,6 +296,7 @@ def load_config(
                 temp_conversion=temp_conversion,
                 full_threshold_pct=full_threshold_pct,
                 empty_threshold_pct=empty_threshold_pct,
+                level_probes=level_probes,
             )
         )
 
@@ -233,4 +311,5 @@ def load_config(
         i2c_address=i2c_address,
         mqtt=mqtt,
         tanks=tanks,
+        gpio_chip=parser.get("gpio", "chip", fallback="/dev/gpiochip0"),
     )

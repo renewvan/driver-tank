@@ -14,3 +14,9 @@ sensor_max = 190.0
 [tank.grey]
 sensor_min = 0.0
 sensor_max = 190.0
+
+; Grey tank read by one Level probe at the full mark instead of a sender:
+; [tank.grey]
+; sensor_type    = probes
+; probes         = 1:100
+; fixed_resistor = 47000
