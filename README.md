@@ -1,8 +1,17 @@
 # driver-tank
 
-Native MQTT driver for ADS1115-based resistive tank senders (fresh/grey
-water). Converts voltage → resistance → percentage with a layered config
-pattern. Calibration is config-file only.
+Native MQTT driver for ADS1115-based tank level sensors (fresh/grey
+water). Each tank is read by one **Level sensor** (see `CONTEXT.md`),
+chosen per tank with `sensor_type`:
+
+- `sender` (default) — a continuous resistive sender: voltage → resistance → percentage.
+- `probes` — **Level probes**: conductive wet/dry rods or screws at fixed heights
+  (e.g. a CBE 4-rod fresh probe, or one pair of screw probes at a grey tank's
+  full mark). The level is a **Stepped level**: the mark of the highest wet probe,
+  or 0 (see hub `docs/adr/0033-stepped-tank-levels.md`).
+- `voltage` — a continuous 0–2.5 V (capacitive) sensor. Not supported yet.
+
+Calibration is config-file only.
 
 New `driver-*` repos start from [`renewvan/driver-template`](https://github.com/renewvan/driver-template); this repo is a real device built to the same layout (per the **Driver** term in
 `hub/docs/architecture.md`'s Terminology section: "anything that
@@ -26,10 +35,12 @@ Retained, under `renewvan/tank/<fresh|grey>/`:
 - `alarm_threshold_pct` — number 0–100, level that trips `alarm_state` to `alarm` (optional, only if alarm is configured per tank)
 - `alarm_restore_pct` — number 0–100, level that clears `alarm_state` back to `ok` (optional, only if alarm is configured per tank)
 - `last_inspected_at` — string, ISO-8601 timestamp with local UTC offset (optional, only if set via `/set` command topic)
+- `level_marks_pct` — JSON array of numbers, the tank's Level marks (volume %, ascending; only for `sensor_type = probes`). Its presence tells consumers `level_pct` is stepped
 
 **Live fields** (republished on every sensor read, ~3s default):
-- `level_pct` — number 0–100 (raw sender reading; alarms/full-empty latching key off this)
-- `status` — `ok` / `open_circuit` / `short_circuit` (ADS1115 sensor health)
+- `level_pct` — number 0–100 (raw sender reading, or the Stepped level for probes; alarms/full-empty latching key off this)
+- `status` — `ok` / `open_circuit` / `short_circuit` (ADS1115 sensor health; always `ok` for probes, where a dry probe is an open circuit by nature)
+- `volume_since_full_l` / `volume_since_empty_l` — liters moved since the last full/empty latch (always 0 for probes)
 - `alarm_state` — `ok` / `alarm` (optional, only if alarm is configured per tank)
 - `temperature_c` — number, degrees Celsius (optional, only if an NTC temp channel is configured per tank)
 
@@ -72,6 +83,52 @@ For each tank, the ADS1115 reads a variable resistor (the tank-level sender).
 
 Each tank's calibration maps sender resistance → level %.  
 Configure `sensor_min`/`sensor_max` (resistance in ohms at EMPTY/FULL) and `fixed_resistor` in `config.default.ini`.
+
+### Level probes (`sensor_type = probes`)
+
+Each probe gets its own ADS1115 channel through the same divider as a sender,
+with a **large** `fixed_resistor` (10–100 kΩ, e.g. 47 kΩ; not 220 Ω). The
+common (longest) rod goes to GND. A dry probe reads near 3.3 V (open circuit,
+normal); water bridging it to the common rod pulls the channel down.
+
+```
+   +3.3V  (or probe_excitation_gpio)
+     |
+   [fixed_resistor]  (e.g. 47kΩ)
+     |
+ ---[ADS1115 Ax]---
+     |
+   [probe] ~~ water ~~ [common rod] -- GND
+```
+
+The Pi replaces the kit's LED panel: disconnect the probes from it.
+
+```ini
+[tank.grey]
+sensor_type    = probes
+; <channel>:<height_pct>, height = probe tip as % of tank depth
+probes         = 1:100
+fixed_resistor = 47000
+```
+
+A CBE 4-rod fresh probe (rods cut to ⅓ and ⅔ of the depth, shortest = full)
+is `probes = 1:33, 2:66, 3:100`. `shape` applies to the heights, so the
+published marks are volume %. A probes tank must not set `channel`,
+`sensor_min` or `sensor_max`.
+
+- `probe_wet_max_ohm` (default 100000): a dry probe turns wet below this.
+- `probe_dry_min_ohm` (default 150000): a wet probe turns dry above this (hysteresis).
+  Tune both against your water: log at DEBUG to see each probe's voltage.
+- `probe_excitation_gpio` (optional): feed the divider from this GPIO instead of
+  3.3 V. It is switched on only while the probes are read (`probe_settle_ms`,
+  default 5), so no DC sits on the probes between reads, which would corrode
+  them by electrolysis. Needs the gpiochip in the container
+  (`devices: ["/dev/gpiochip0:/dev/gpiochip0"]`); `[gpio] chip` picks another.
+
+Steps are not a volume: `volume_since_*` stay 0. `last_full_at` latches when a
+probe at or above `full_threshold_pct` is wet; `last_empty_at` only if a probe
+sits at or below `empty_threshold_pct`. A wet probe above a dry one is logged as
+a warning (`status` stays `ok`).
 
 **Enable I2C on Raspberry Pi (one-time prerequisite)**:
 

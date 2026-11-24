@@ -540,3 +540,162 @@ def test_driver_key_matches_manifest_and_info_topic():
     manifest = json.loads((Path(driver_mod.__file__).parent.parent / "manifest.json").read_text())
     assert manifest["driver"] == driver_mod.DRIVER_KEY
     assert INFO_TOPIC == f"renewvan/{driver_mod.DRIVER_KEY}/info"
+
+
+# --- Level probes: Stepped level (hub ADR 0033) ------------------------------
+
+
+class _ExcitationSpy:
+    def __init__(self, events: list[str]):
+        self.events = events
+
+    def on(self) -> None:
+        self.events.append("on")
+
+    def off(self) -> None:
+        self.events.append("off")
+
+
+class _LoggingADC:
+    def __init__(self, voltages: dict[int, float], events: list[str]):
+        self.voltages = voltages
+        self.events = events
+
+    def read_voltage(self, channel: int, pga) -> float:
+        self.events.append(f"read{channel}")
+        return self.voltages[channel]
+
+
+_DRY_V = 3.3
+_WET_V = 0.58  # ~10 kohm against 47 kohm at 3.3 V
+
+
+def make_probe_tank(*marks: float, alarm: bool = False, empty_threshold_pct: float = 1.0):
+    from dataclasses import replace
+
+    from driver_tank.probes import LevelProbes, Probe
+
+    probes = LevelProbes(
+        probes=tuple(Probe(channel=i, mark_pct=m) for i, m in enumerate(marks)),
+        fixed_resistor=47_000.0,
+        reference_voltage=3.3,
+        wet_max_ohm=100_000.0,
+        dry_min_ohm=150_000.0,
+    )
+    tank = replace(
+        make_tank(capacity_l=70.0, empty_threshold_pct=empty_threshold_pct),
+        id="grey",
+        channel=None,
+        calibration=None,
+        level_probes=probes,
+    )
+    if alarm:
+        tank = replace(tank, alarm_direction="high", alarm_threshold=90.0, alarm_restore=80.0)
+    return tank
+
+
+def _probe_read(monkeypatch, tmp_path, tank, voltages, tank_state=None, excitation=None):
+    import driver_tank.driver as driver_mod
+
+    monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
+    publisher = _FakePublisher()
+    tank_state = tank_state or TankState()
+    events: list[str] = []
+    driver_mod.read_and_publish(
+        publisher, _LoggingADC(voltages, events), tank, tank_state, now=0.0, excitation=excitation
+    )
+    return {t: json.loads(p) for t, p in publisher.published}, tank_state
+
+
+def test_probe_tank_publishes_mark_of_highest_wet_probe(monkeypatch, tmp_path):
+    tank = make_probe_tank(33, 66, 100)
+    pub, _ = _probe_read(monkeypatch, tmp_path, tank, {0: _WET_V, 1: _WET_V, 2: _DRY_V})
+    assert pub["renewvan/tank/grey/level_pct"] == 66.0
+    assert pub["renewvan/tank/grey/status"] == "ok"
+
+
+def test_probe_tank_all_dry_is_zero_and_ok(monkeypatch, tmp_path):
+    pub, _ = _probe_read(monkeypatch, tmp_path, make_probe_tank(100), {0: _DRY_V})
+    assert pub["renewvan/tank/grey/level_pct"] == 0.0
+    assert pub["renewvan/tank/grey/status"] == "ok"
+
+
+def test_inconsistent_probes_stay_ok(monkeypatch, tmp_path):
+    tank = make_probe_tank(33, 66)
+    pub, _ = _probe_read(monkeypatch, tmp_path, tank, {0: _DRY_V, 1: _WET_V})
+    assert pub["renewvan/tank/grey/status"] == "ok"
+    assert pub["renewvan/tank/grey/level_pct"] == 66.0
+
+
+def test_probe_tank_high_alarm_trips_when_full_probe_wet(monkeypatch, tmp_path):
+    pub, _ = _probe_read(monkeypatch, tmp_path, make_probe_tank(100, alarm=True), {0: _WET_V})
+    assert pub["renewvan/tank/grey/alarm_state"] == "alarm"
+
+
+def test_probe_tank_volumes_are_always_zero(monkeypatch, tmp_path):
+    tank = make_probe_tank(100)
+    state = TankState(level_pct_at_full_commit=100.0, level_pct_at_empty_commit=0.0)
+    pub, _ = _probe_read(monkeypatch, tmp_path, tank, {0: _DRY_V}, tank_state=state)
+    assert pub["renewvan/tank/grey/volume_since_full_l"] == 0.0
+    assert pub["renewvan/tank/grey/volume_since_empty_l"] == 0.0
+
+
+def test_probe_tank_full_latch_commits_when_full_probe_wet(monkeypatch, tmp_path):
+    pub, state = _probe_read(monkeypatch, tmp_path, make_probe_tank(100), {0: _WET_V})
+    assert "renewvan/tank/grey/last_full_at" in pub
+    assert state.last_full_at is not None
+
+
+def test_probe_tank_never_latches_empty_without_a_probe_at_the_empty_mark(monkeypatch, tmp_path):
+    pub, state = _probe_read(monkeypatch, tmp_path, make_probe_tank(100), {0: _DRY_V})
+    assert "renewvan/tank/grey/last_empty_at" not in pub
+    assert state.last_empty_at is None
+
+
+def test_probe_tank_latches_empty_when_lowest_probe_is_at_the_empty_mark(monkeypatch, tmp_path):
+    tank = make_probe_tank(5, 100, empty_threshold_pct=5.0)
+    pub, _ = _probe_read(monkeypatch, tmp_path, tank, {0: _DRY_V, 1: _DRY_V})
+    assert "renewvan/tank/grey/last_empty_at" in pub
+
+
+def test_probe_wet_state_is_remembered_for_hysteresis(monkeypatch, tmp_path):
+    tank = make_probe_tank(100)
+    between = 3.3 * 120_000 / (120_000 + 47_000)  # above wet_max, below dry_min
+    state = TankState(probe_wet=[True])
+    pub, state = _probe_read(monkeypatch, tmp_path, tank, {0: between}, tank_state=state)
+    assert pub["renewvan/tank/grey/level_pct"] == 100.0
+    assert state.probe_wet == [True]
+
+
+def test_excitation_is_on_only_while_probes_are_read(monkeypatch, tmp_path):
+    import driver_tank.driver as driver_mod
+
+    monkeypatch.setattr(driver_mod, "_STATE_DIR", tmp_path)
+    monkeypatch.setattr(driver_mod.time, "sleep", lambda s: None)
+    events: list[str] = []
+    driver_mod.read_and_publish(
+        _FakePublisher(),
+        _LoggingADC({0: _WET_V, 1: _DRY_V}, events),
+        make_probe_tank(50, 100),
+        TankState(),
+        now=0.0,
+        excitation=_ExcitationSpy(events),
+    )
+    assert events == ["on", "read0", "read1", "off"]
+
+
+def test_publish_identity_publishes_level_marks_for_probe_tank():
+    import driver_tank.driver as driver_mod
+
+    publisher = _FakePublisher()
+    driver_mod.publish_identity(publisher, make_probe_tank(33, 66, 100), TankState())
+    published = dict(publisher.published)
+    assert json.loads(published["renewvan/tank/grey/level_marks_pct"]) == [33.0, 66.0, 100.0]
+
+
+def test_publish_identity_omits_level_marks_for_sender_tank():
+    import driver_tank.driver as driver_mod
+
+    publisher = _FakePublisher()
+    driver_mod.publish_identity(publisher, make_tank(), TankState())
+    assert "renewvan/tank/fresh/level_marks_pct" not in dict(publisher.published)
